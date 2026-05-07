@@ -167,6 +167,21 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--opaque-background", dest="transparent_background", action="store_false")
     run_parser.add_argument("--cleanup", default="", help="Comma separated unfake cleanup flags.")
     run_parser.add_argument("--preview-scale", type=int, default=16)
+    run_parser.add_argument("--max-preview-side", type=int, default=4096, help="Cap preview image longest side.")
+    run_parser.add_argument(
+        "--arrange-sprites",
+        action="store_true",
+        help="Split visible mask components and arrange them into a uniform sprite sheet.",
+    )
+    run_parser.add_argument(
+        "--arrange-columns",
+        type=int,
+        default=0,
+        help="Column count for arranged sprites. 0 means auto square layout.",
+    )
+    run_parser.add_argument("--arrange-padding", type=int, default=2, help="Cell padding for arranged sprites.")
+    run_parser.add_argument("--arrange-min-area", type=int, default=16, help="Ignore smaller mask islands.")
+    run_parser.add_argument("--arrange-merge-gap", type=int, default=2, help="Merge nearby mask islands before splitting.")
     run_parser.add_argument("--json", action="store_true", help="Emit JSON instead of text.")
 
     web_parser = subparsers.add_parser("web", help="Start the local web interface.")
@@ -246,6 +261,12 @@ def handle_run(args: argparse.Namespace) -> int:
             transparent_background=args.transparent_background,
             cleanup=args.cleanup,
             preview_scale=args.preview_scale,
+            max_preview_side=args.max_preview_side,
+            arrange_sprites=args.arrange_sprites,
+            arrange_columns=args.arrange_columns,
+            arrange_padding=args.arrange_padding,
+            arrange_min_area=args.arrange_min_area,
+            arrange_merge_gap=args.arrange_merge_gap,
         ),
     )
 
@@ -268,8 +289,12 @@ def handle_run(args: argparse.Namespace) -> int:
             "sprite",
             "preview",
             "pixelRaw",
+            "arrangedSprite",
+            "arrangedPreview",
+            "arrangedMaskRgba",
             "subjectMaskRgba",
             "outlineMaskRgba",
+            "arrangeReport",
             "report",
         ]:
             item = artifacts.get(key)

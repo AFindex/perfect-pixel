@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Perfect Pixel Workflow</title>
-    <link rel="stylesheet" href="./styles.css?v=20260507-stage-progress" />
+    <link rel="stylesheet" href="./styles.css?v=20260508-qa-speed" />
   </head>
   <body>
     <main class="app-shell">
@@ -186,6 +186,34 @@
             <input id="useTransparent" type="checkbox" checked />
             <span>输出透明背景</span>
           </label>
+
+          <div class="optional-panel" id="arrangePanel" aria-label="可选切分重排">
+            <label class="check-row arrange-toggle">
+              <input id="arrangeSprites" type="checkbox" />
+              <span>按 mask 切分并重排</span>
+            </label>
+            <div class="arrange-options" id="arrangeOptions">
+              <label class="field">
+                <span>重排列数</span>
+                <input id="arrangeColumns" type="number" min="0" max="64" value="0" />
+              </label>
+
+              <label class="range-field">
+                <span>cell 留白 <strong id="arrangePaddingValue">2</strong></span>
+                <input id="arrangePadding" type="range" min="0" max="16" value="2" />
+              </label>
+
+              <label class="field">
+                <span>最小块面积</span>
+                <input id="arrangeMinArea" type="number" min="1" max="99999" value="16" />
+              </label>
+
+              <label class="range-field">
+                <span>合并间距 <strong id="arrangeMergeGapValue">2</strong></span>
+                <input id="arrangeMergeGap" type="range" min="0" max="16" value="2" />
+              </label>
+            </div>
+          </div>
         </aside>
 
         <section class="flow-panel" aria-label="管线图">
@@ -236,6 +264,11 @@
               <span class="stage-index">07</span>
               <strong>导出与 QA</strong>
               <small>mask / preview / metadata</small>
+            </button>
+            <button class="stage-card" data-step="arrange" type="button" role="listitem">
+              <span class="stage-index">08</span>
+              <strong>Mask 切分重排</strong>
+              <small>可选 / spritesheet</small>
             </button>
           </div>
         </section>
@@ -293,7 +326,7 @@
       <section class="implementation" aria-label="实现落点">
         <div>
           <p class="panel-kicker">Implementation</p>
-          <h2>建议落地为三段式工具</h2>
+          <h2>建议落地为四段式工具</h2>
         </div>
         <div class="implementation-grid">
           <article class="implementation-item">
@@ -308,11 +341,15 @@
             <strong>postcheck.py</strong>
             <span>Pillow 量化、最近邻预览、输出 debug 图和 metadata。</span>
           </article>
+          <article class="implementation-item">
+            <strong>arrange_sprites.py</strong>
+            <span>按透明 mask 切分组件，统一 cell 后输出整理版 sprite 和 mask。</span>
+          </article>
         </div>
       </section>
     </main>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=20260507-stage-progress"></script>
+    <script src="./app.js?v=20260508-qa-speed"></script>
   </body>
 </html>

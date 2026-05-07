@@ -16,6 +16,8 @@ D:\Godot\projs\perfect_pixel\index.html
 
 Web 参数面板支持悬停 `?` 查看参数含义，也可以把当前算法参数保存为预设并随时读取。
 
+`postcheck.py` 默认会请求最近邻预览放大 16 倍，但会把预览图最长边限制在 4096 像素以内。这样小像素图仍然能 x16 检查，大尺寸 clean 图不会因为生成超大预览拖慢 QA。
+
 要启用“运行管线”，先初始化环境：
 
 ```powershell
@@ -74,6 +76,22 @@ python tools/cli.py run input.png
 - `06_outline_mask.png`：黑底白线版描边环，主要用于检查。
 - `04_edge_band.png`：白边清理用的内部边缘带，不建议拿它做最终描边。
 
+## 可选精灵表重排
+
+勾选 Web 里的“按 mask 切分并重排”，或在 CLI 加 `--arrange-sprites`，会在 `postcheck.py` 后追加第 08 步：
+
+- `10_arranged_sprite.png`：按最终透明 mask 切分并统一 cell 后的整理版精灵图。
+- `10_arranged_sprite_x16.png`：最近邻放大预览。
+- `10_arranged_mask_rgba.png`：透明背景的同布局 mask，后续做描边或碰撞区域时优先用这个。
+- `10_arranged_mask.png`：黑底白色版同布局 mask，主要用于检查。
+- `10_arrange_report.json`：每个组件的原 bbox、目标 bbox、cell 尺寸和行列信息。
+
+常用 CLI 示例：
+
+```powershell
+python tools/cli.py run input.png --arrange-sprites --arrange-columns 4 --arrange-padding 2 --arrange-merge-gap 2
+```
+
 ## 当前管线
 
 1. 导入与标准化：Pillow 读取输入，统一 RGBA。
@@ -83,6 +101,7 @@ python tools/cli.py run input.png
 5. unfake 像素恢复：复用本机 `unfake` CLI。
 6. 调色板收敛：Pillow quantize 或 pngquant。
 7. 导出与 QA：true-res PNG、最近邻预览、debug 图、metadata。
+8. 可选 Mask 切分重排：OpenCV 连通组件切分，Pillow 统一 cell 排列，导出整理版 sprite 和 mask。
 
 ## 可跑的最小命令链
 

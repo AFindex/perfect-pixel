@@ -56,7 +56,35 @@ python tools/cli.py run input.png
 - `--background-mode`
 - `--outline-width`
 - `--auto-colors`
+- `--arrange-sprites`
+- `--arrange-columns`
+- `--arrange-padding`
+- `--arrange-min-area`
+- `--arrange-merge-gap`
+- `--max-preview-side`
 - `--json`
+
+QA 预览默认请求 `--preview-scale 16`，同时用 `--max-preview-side 4096` 自动限制最长边。大图会降成 x1/x2 预览，避免导出阶段生成几亿像素的大 PNG。
+
+把 AI 生成时散乱排布的多个元素整理成规则精灵表：
+
+```powershell
+.\.venv\Scripts\perfect-pixel.exe run input.png `
+  -o build/perfect-pixel `
+  --subdir 1234 `
+  --arrange-sprites `
+  --arrange-columns 4 `
+  --arrange-padding 2 `
+  --arrange-merge-gap 2
+```
+
+重排阶段会根据最终 `sprite.png` 的透明 mask 找组件，输出：
+
+- `10_arranged_sprite.png`
+- `10_arranged_sprite_x16.png`
+- `10_arranged_mask_rgba.png`
+- `10_arranged_mask.png`
+- `10_arrange_report.json`
 
 ### `web`
 

@@ -242,20 +242,33 @@ def run_pipeline():
     colors = int_form("colors", 256)
     transparent = bool_form("transparent_background", True)
     cleanup = text_form("cleanup", "")
+    max_preview_side = int_form("max_preview_side", 4096)
+    arrange_sprites = bool_form("arrange_sprites", False)
+    arrange_columns = int_form("arrange_columns", 0)
+    arrange_padding = int_form("arrange_padding", 2)
+    arrange_min_area = int_form("arrange_min_area", 16)
+    arrange_merge_gap = int_form("arrange_merge_gap", 2)
 
     unfake_output = output_dir / "08_unfake_pixel_raw.png"
     clean_output = output_dir / "07_clean_rgba.png"
-    for stale in [
+    stale_paths = [
         clean_output,
         unfake_output,
         output_dir / "sprite.png",
-        output_dir / "sprite_x16.png",
         output_dir / "report.json",
         output_dir / "06_subject_mask.png",
         output_dir / "06_subject_mask_rgba.png",
         output_dir / "06_outline_mask.png",
         output_dir / "06_outline_mask_rgba.png",
-    ]:
+        output_dir / "10_arranged_sprite.png",
+        output_dir / "10_arranged_sprite_x16.png",
+        output_dir / "10_arranged_mask.png",
+        output_dir / "10_arranged_mask_rgba.png",
+        output_dir / "10_arrange_report.json",
+    ]
+    stale_paths.extend(output_dir.glob("sprite_x*.png"))
+    stale_paths.extend(output_dir.glob("10_arranged_sprite_x*.png"))
+    for stale in stale_paths:
         if stale.exists() and stale.is_file():
             stale.unlink()
 
@@ -319,10 +332,35 @@ def run_pipeline():
         str(output_dir),
         "--preview-scale",
         "16",
+        "--max-preview-side",
+        str(max_preview_side),
     ]
     if process_mode != "clean" and not auto_colors:
         post_command.extend(["--colors", str(colors)])
     commands.append(post_command)
+
+    if arrange_sprites:
+        commands.append(
+            [
+                sys.executable,
+                str(ROOT / "tools" / "arrange_sprites.py"),
+                str(output_dir / "sprite.png"),
+                "--output-dir",
+                str(output_dir),
+                "--columns",
+                str(arrange_columns),
+                "--padding",
+                str(arrange_padding),
+                "--min-area",
+                str(arrange_min_area),
+                "--merge-gap",
+                str(arrange_merge_gap),
+                "--preview-scale",
+                "16",
+                "--max-preview-side",
+                str(max_preview_side),
+            ],
+        )
 
     logs = []
     for command in commands:
@@ -339,18 +377,34 @@ def run_pipeline():
                 },
             ), 500
 
+    report = {}
+    report_path = output_dir / "report.json"
+    if report_path.exists():
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    arrange_report = {}
+    arrange_report_path = output_dir / "10_arrange_report.json"
+    if arrange_report_path.exists():
+        arrange_report = json.loads(arrange_report_path.read_text(encoding="utf-8"))
+
+    preview_path = Path(str(report.get("preview") or output_dir / "sprite_x16.png"))
+    arranged_preview_path = Path(str(arrange_report.get("preview") or output_dir / "10_arranged_sprite_x16.png"))
     artifact_paths = {
         "input": input_path,
         "clean": clean_output,
         "pixelRaw": unfake_output,
         "sprite": output_dir / "sprite.png",
-        "preview": output_dir / "sprite_x16.png",
+        "preview": preview_path,
         "mask": output_dir / "02_connected_bg_mask.png",
         "trimap": output_dir / "05_trimap.png",
         "subjectMask": output_dir / "06_subject_mask.png",
         "subjectMaskRgba": output_dir / "06_subject_mask_rgba.png",
         "outlineMask": output_dir / "06_outline_mask.png",
         "outlineMaskRgba": output_dir / "06_outline_mask_rgba.png",
+        "arrangedSprite": output_dir / "10_arranged_sprite.png",
+        "arrangedPreview": arranged_preview_path,
+        "arrangedMask": output_dir / "10_arranged_mask.png",
+        "arrangedMaskRgba": output_dir / "10_arranged_mask_rgba.png",
+        "arrangeReport": output_dir / "10_arrange_report.json",
         "report": output_dir / "report.json",
     }
     artifacts = {
@@ -358,11 +412,6 @@ def run_pipeline():
         for key, path in artifact_paths.items()
         if path.exists()
     }
-
-    report = {}
-    report_path = output_dir / "report.json"
-    if report_path.exists():
-        report = json.loads(report_path.read_text(encoding="utf-8"))
 
     return jsonify(
         {
@@ -372,6 +421,7 @@ def run_pipeline():
             "outputDir": str(output_dir),
             "artifacts": artifacts,
             "report": report,
+            "arrangeReport": arrange_report,
             "logs": logs,
         },
     )

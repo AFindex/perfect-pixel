@@ -586,6 +586,38 @@ h2 {
   font-weight: 640;
 }
 
+.optional-panel {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 15px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: #fff;
+}
+
+.arrange-toggle {
+  margin-bottom: 0;
+}
+
+.arrange-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  transition: opacity 140ms ease;
+}
+
+.arrange-options.is-disabled {
+  opacity: 0.55;
+}
+
+.arrange-options .field,
+.arrange-options .range-field {
+  margin-bottom: 0;
+}
+
 .field input:focus,
 .field select:focus {
   border-color: var(--teal);
@@ -1144,9 +1176,9 @@ pre {
 
 .implementation-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
   gap: 12px;
-  width: min(760px, 58vw);
+  width: min(980px, 64vw);
 }
 
 .implementation-item {
@@ -1251,7 +1283,8 @@ pre {
   }
 
   .run-summary,
-  .visual-grid {
+  .visual-grid,
+  .arrange-options {
     grid-template-columns: 1fr;
   }
 }

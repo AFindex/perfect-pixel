@@ -77,6 +77,16 @@ const steps = {
     output: "sprite.png, sprite_x16.png, report.json",
     artifacts: ["sprite.png", "sprite_x16.png", "report.json"],
   },
+  arrange: {
+    phase: "阶段 08（可选）",
+    title: "Mask 切分重排",
+    summary:
+      "按最终 sprite 的透明 mask 找连通主体块，把胡乱排列的元素裁切出来并居中放进统一尺寸 cell。适合把 AI 生成的一堆散件整理成可用精灵表。",
+    reuse: "OpenCV connectedComponentsWithStats, Pillow alpha_composite",
+    input: "sprite.png alpha / mask, 列数, cell padding, 合并间距",
+    output: "arranged_sprite.png, arranged_mask_rgba.png, arrange_report.json",
+    artifacts: ["10_arranged_sprite.png", "10_arranged_mask_rgba.png", "10_arranged_sprite_x16.png", "10_arrange_report.json"],
+  },
 };
 
 const qs = (selector) => document.querySelector(selector);
@@ -120,6 +130,12 @@ const controls = {
   cleanupMorph: qs("#cleanupMorph"),
   cleanupJaggy: qs("#cleanupJaggy"),
   useTransparent: qs("#useTransparent"),
+  arrangeSprites: qs("#arrangeSprites"),
+  arrangeColumns: qs("#arrangeColumns"),
+  arrangePadding: qs("#arrangePadding"),
+  arrangeMinArea: qs("#arrangeMinArea"),
+  arrangeMergeGap: qs("#arrangeMergeGap"),
+  arrangeOptions: qs("#arrangeOptions"),
 };
 
 const API_BASE = window.location.protocol.startsWith("http")
@@ -215,6 +231,26 @@ const helpTips = [
   {
     selector: "#useTransparent",
     help: "让 unfake 输出透明背景。关闭后可能保留背景色，适合某些需要实底贴图的流程；做 sprite 或抠图通常保持开启。",
+  },
+  {
+    selector: "#arrangeSprites",
+    help: "可选第 08 步。根据最终 sprite 的透明 mask 找独立组件，裁切后统一放进规则网格，适合把 AI 生成的散乱元素整理成精灵图。",
+  },
+  {
+    selector: "#arrangeColumns",
+    help: "重排后精灵表的列数。0 表示自动接近正方形；指定列数可以匹配引擎里已有的 sprite sheet 读取方式。",
+  },
+  {
+    selector: "#arrangePadding",
+    help: "每个统一 cell 内部留白像素。值越大，单个元素之间越不容易贴边；过大会让最终精灵表变大。",
+  },
+  {
+    selector: "#arrangeMinArea",
+    help: "小于这个面积的 mask 岛会被当成噪点忽略。值越大越能过滤脏点，但可能误删很小的道具、星星或装饰。",
+  },
+  {
+    selector: "#arrangeMergeGap",
+    help: "切分前先把距离较近的 mask 岛合并。适合一个角色被发丝、武器、阴影切成几块的情况；过大可能把相邻两个素材合并成一个。",
   },
 ];
 
@@ -492,6 +528,11 @@ function collectParameterSettings() {
     cleanupMorph: controls.cleanupMorph.checked,
     cleanupJaggy: controls.cleanupJaggy.checked,
     useTransparent: controls.useTransparent.checked,
+    arrangeSprites: controls.arrangeSprites.checked,
+    arrangeColumns: controls.arrangeColumns.value,
+    arrangePadding: controls.arrangePadding.value,
+    arrangeMinArea: controls.arrangeMinArea.value,
+    arrangeMergeGap: controls.arrangeMergeGap.value,
   };
 }
 
@@ -516,6 +557,11 @@ function applyParameterSettings(settings) {
   controls.cleanupMorph.checked = Boolean(settings.cleanupMorph);
   controls.cleanupJaggy.checked = Boolean(settings.cleanupJaggy);
   controls.useTransparent.checked = settings.useTransparent !== false;
+  controls.arrangeSprites.checked = Boolean(settings.arrangeSprites);
+  controls.arrangeColumns.value = settings.arrangeColumns ?? "0";
+  controls.arrangePadding.value = settings.arrangePadding ?? "2";
+  controls.arrangeMinArea.value = settings.arrangeMinArea ?? "16";
+  controls.arrangeMergeGap.value = settings.arrangeMergeGap ?? "2";
   renderCommand();
 }
 
@@ -532,6 +578,7 @@ function presetSummary(settings) {
     `edge ${settings.edgeContract}`,
     `outline ${settings.outlineWidth}`,
     settings.processMode === "clean" ? "" : `${settings.method}/${settings.detect}`,
+    settings.arrangeSprites ? `重排 ${settings.arrangeColumns || 0}列` : "",
   ]
     .filter(Boolean)
     .join(" · ");
@@ -622,7 +669,8 @@ function shouldRunUnfake() {
 }
 
 function currentRunStages() {
-  return shouldRunUnfake() ? STAGE_ORDER : CLEAN_STAGE_ORDER;
+  const stages = shouldRunUnfake() ? STAGE_ORDER : CLEAN_STAGE_ORDER;
+  return controls.arrangeSprites.checked ? [...stages, "arrange"] : stages;
 }
 
 function clearStageProgress() {
@@ -693,12 +741,14 @@ function finishStageProgress() {
 function stageFromRunError(data) {
   const logs = Array.isArray(data?.logs) ? data.logs : [];
   const failedCommand = Array.isArray(data?.failedCommand) ? data.failedCommand.join(" ") : "";
+  if (/arrange_sprites\.py/.test(failedCommand)) return "arrange";
   if (/postcheck\.py/.test(failedCommand)) return "qa";
   if (/unfake/.test(failedCommand)) return "unfake";
   if (/preclean\.py/.test(failedCommand)) return "defringe";
   if (!logs.length) return pipelineProgress.stages[pipelineProgress.activeIndex] || "ingest";
   if (logs.length <= 1) return "defringe";
   if (shouldRunUnfake() && logs.length === 2) return "unfake";
+  if (controls.arrangeSprites.checked && logs.length >= (shouldRunUnfake() ? 4 : 3)) return "arrange";
   return "qa";
 }
 
@@ -734,6 +784,7 @@ function buildCommand() {
   const cleanOutput = `${outputBase}/07_clean_rgba.png`;
   const unfakeOutput = `${outputBase}/08_unfake_pixel_raw.png`;
   const postInput = shouldRunUnfake() ? unfakeOutput : cleanOutput;
+  const spriteOutput = `${outputBase}/sprite.png`;
   const cleanup = getCleanupOptions();
   const postColors = controls.autoColors.checked ? "" : ` --colors ${controls.colors.value}`;
   const lines = [
@@ -782,8 +833,16 @@ function buildCommand() {
   lines.push(
     "",
     "# 06-07 跑 postcheck.py 生成 sprite、最近邻预览和 report",
-    `python tools/postcheck.py ${quotePath(postInput)} --output-dir ${quotePath(outputDir)} --preview-scale 16${shouldRunUnfake() ? postColors : ""}`,
+    `python tools/postcheck.py ${quotePath(postInput)} --output-dir ${quotePath(outputDir)} --preview-scale 16 --max-preview-side 4096${shouldRunUnfake() ? postColors : ""}`,
   );
+
+  if (controls.arrangeSprites.checked) {
+    lines.push(
+      "",
+      "# 08 可选：按最终透明 mask 切分组件，统一 cell 大小后重排成精灵表",
+      `python tools/arrange_sprites.py ${quotePath(spriteOutput)} --output-dir ${quotePath(outputDir)} --columns ${controls.arrangeColumns.value} --padding ${controls.arrangePadding.value} --min-area ${controls.arrangeMinArea.value} --merge-gap ${controls.arrangeMergeGap.value} --preview-scale 16 --max-preview-side 4096`,
+    );
+  }
 
   return lines.join("\n");
 }
@@ -801,6 +860,17 @@ function syncModeControls() {
     control.disabled = disabled;
   });
   controls.colorsField.hidden = disabled || controls.autoColors.checked;
+
+  const arrangeDisabled = !controls.arrangeSprites.checked;
+  [
+    controls.arrangeColumns,
+    controls.arrangePadding,
+    controls.arrangeMinArea,
+    controls.arrangeMergeGap,
+  ].forEach((control) => {
+    control.disabled = arrangeDisabled;
+  });
+  controls.arrangeOptions.classList.toggle("is-disabled", arrangeDisabled);
 }
 
 function renderCommand() {
@@ -812,6 +882,8 @@ function renderCommand() {
   qs("#alphaThresholdValue").textContent = controls.alphaThreshold.value;
   qs("#edgeContractValue").textContent = controls.edgeContract.value;
   qs("#outlineWidthValue").textContent = controls.outlineWidth.value;
+  qs("#arrangePaddingValue").textContent = controls.arrangePadding.value;
+  qs("#arrangeMergeGapValue").textContent = controls.arrangeMergeGap.value;
   syncModeControls();
 }
 
@@ -853,6 +925,12 @@ function appendRunSettings(form) {
   form.append("colors", controls.colors.value);
   form.append("transparent_background", controls.useTransparent.checked ? "true" : "false");
   form.append("cleanup", getCleanupOptions().join(","));
+  form.append("max_preview_side", "4096");
+  form.append("arrange_sprites", controls.arrangeSprites.checked ? "true" : "false");
+  form.append("arrange_columns", controls.arrangeColumns.value);
+  form.append("arrange_padding", controls.arrangePadding.value);
+  form.append("arrange_min_area", controls.arrangeMinArea.value);
+  form.append("arrange_merge_gap", controls.arrangeMergeGap.value);
 }
 
 function setRunStatus(label) {
@@ -871,7 +949,12 @@ function commandToString(command) {
 function renderResult(data) {
   const artifacts = data.artifacts || {};
   const report = data.report || {};
+  const arrangeReport = data.arrangeReport || {};
   const links = [
+    ["arrangedSprite", "重排精灵图"],
+    ["arrangedPreview", "重排预览"],
+    ["arrangedMaskRgba", "透明重排 mask"],
+    ["arrangedMask", "黑白重排 mask"],
     ["clean", "干净抠图 07"],
     ["sprite", state.processMode === "clean" ? "正式源图" : "像素源图"],
     ["preview", "最近邻预览"],
@@ -882,9 +965,13 @@ function renderResult(data) {
     ["outlineMask", "黑白描边 mask"],
     ["mask", "背景 mask"],
     ["trimap", "trimap"],
+    ["arrangeReport", "arrange_report.json"],
     ["report", "report.json"],
   ].filter(([key]) => artifacts[key]);
   const visuals = [
+    ["arrangedPreview", "重排预览", "统一 cell 后的精灵表"],
+    ["arrangedSprite", "重排精灵图", "可直接进入项目的整理版"],
+    ["arrangedMaskRgba", "重排 mask", "透明背景，和重排精灵图同布局"],
     ["preview", "最近邻预览", "放大检查像素边缘"],
     ["clean", "07 clean", "干净透明源图"],
     ["sprite", state.processMode === "clean" ? "正式源图" : "像素源图", "最终进入项目的 PNG"],
@@ -902,6 +989,7 @@ function renderResult(data) {
     ["模式", data.processMode === "clean" ? "只清理" : data.processMode],
     ["尺寸", Array.isArray(report.size) ? `${report.size[0]} x ${report.size[1]}` : "-"],
     ["可见色", Number.isFinite(report.visible_color_count) ? String(report.visible_color_count) : "-"],
+    ["切分", Number.isFinite(arrangeReport.component_count) ? `${arrangeReport.component_count} 块` : "-"],
     ["输出", data.outputDir || "-"],
   ].forEach(([label, value]) => {
     const item = document.createElement("div");
@@ -1013,7 +1101,9 @@ async function runPipeline() {
   controls.runPipelineButton.textContent = "运行中";
   setRunStatus("运行中");
   startStageProgress();
-  controls.resultBody.innerHTML = '<p class="empty-state">正在执行 preclean -> unfake -> postcheck...</p>';
+  controls.resultBody.innerHTML = `<p class="empty-state">正在执行 preclean -> ${
+    shouldRunUnfake() ? "unfake -> " : ""
+  }postcheck${controls.arrangeSprites.checked ? " -> arrange" : ""}...</p>`;
 
   try {
     const response = await fetch(`${API_BASE}/api/run`, {
@@ -1212,7 +1302,7 @@ function bindEvents() {
   });
 
   Object.values(controls).forEach((control) => {
-    if (!control || control === controls.colorsField) return;
+    if (!control || control === controls.colorsField || control === controls.arrangeOptions) return;
     control.addEventListener("input", renderCommand);
     control.addEventListener("change", renderCommand);
   });

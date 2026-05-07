@@ -20,6 +20,8 @@ from werkzeug.utils import secure_filename
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = ROOT / "build" / "perfect-pixel"
 ALLOWED_FILE_ROOTS = {ROOT.resolve()}
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 app = Flask(__name__, static_folder=None)
 
@@ -134,7 +136,7 @@ def run_command(command: list[str], cwd: Path) -> dict[str, object]:
         cwd=str(cwd),
         capture_output=True,
         text=True,
-        timeout=180,
+        timeout=600,
     )
     return {
         "command": command,
@@ -169,6 +171,46 @@ def index():
 @app.get("/api/health")
 def health():
     return jsonify({"ok": True, "root": str(ROOT), "python": sys.executable})
+
+
+def rmbg_settings_from_request(local_files_only: bool = False):
+    from tools.rmbg2 import Rmbg2Settings
+
+    cache_dir_text = request.args.get("cache_dir") or request.form.get("cache_dir") or ""
+    return Rmbg2Settings(
+        device=request.args.get("device") or request.form.get("device") or "auto",
+        cache_dir=Path(cache_dir_text) if cache_dir_text else None,
+        local_files_only=local_files_only,
+    )
+
+
+@app.get("/api/rmbg/status")
+def rmbg_status():
+    from tools.rmbg2 import rmbg2_status
+
+    return jsonify({"ok": True, "rmbg2": rmbg2_status(load_model=False, settings=rmbg_settings_from_request())})
+
+
+@app.post("/api/rmbg/download")
+def rmbg_download():
+    from tools.rmbg2 import Rmbg2Settings, download_model, rmbg2_status, warmup
+
+    cache_dir_text = request.form.get("cache_dir", "").strip()
+    cache_dir = Path(cache_dir_text) if cache_dir_text else None
+    settings = Rmbg2Settings(cache_dir=cache_dir)
+    try:
+        payload = download_model(settings)
+        if bool_form("warmup", True):
+            payload["warmup"] = warmup(Rmbg2Settings(cache_dir=cache_dir, local_files_only=True))
+        return jsonify({"ok": True, "rmbg2": rmbg2_status(load_model=False, settings=settings), "download": payload})
+    except Exception as exc:  # noqa: BLE001 - setup endpoint should return the actionable failure.
+        return jsonify(
+            {
+                "ok": False,
+                "error": str(exc),
+                "rmbg2": rmbg2_status(load_model=False, settings=settings),
+            },
+        ), 500
 
 
 @app.get("/api/pick-output-dir")
@@ -242,6 +284,11 @@ def run_pipeline():
     alpha_threshold = int_form("alpha_threshold", 128)
     edge_contract = int_form("edge_contract", 1)
     outline_width = int_form("outline_width", 2)
+    mask_provider = text_form("mask_provider", "classic")
+    rmbg_bg_threshold = int_form("rmbg_bg_threshold", 32)
+    rmbg_fg_threshold = int_form("rmbg_fg_threshold", 224)
+    rmbg_device = text_form("rmbg_device", "auto")
+    rmbg_local_files_only = bool_form("rmbg_local_files_only", True)
     background_mode = text_form("background_mode", "edges")
     process_mode = text_form("process_mode", "clean")
     detect = text_form("detect", "auto")
@@ -264,6 +311,9 @@ def run_pipeline():
     clean_output = output_dir / "07_clean_rgba.png"
     stale_paths = [
         clean_output,
+        output_dir / "01_rmbg_alpha.png",
+        output_dir / "02_classic_bg_mask.png",
+        output_dir / "02_rmbg_bg_mask.png",
         unfake_output,
         output_dir / "sprite.png",
         output_dir / "report.json",
@@ -297,6 +347,14 @@ def run_pipeline():
             str(output_dir),
             "--bg-tolerance",
             str(bg_tolerance),
+            "--mask-provider",
+            mask_provider,
+            "--rmbg-bg-threshold",
+            str(rmbg_bg_threshold),
+            "--rmbg-fg-threshold",
+            str(rmbg_fg_threshold),
+            "--rmbg-device",
+            rmbg_device,
             "--background-mode",
             background_mode,
             "--alpha-threshold",
@@ -307,6 +365,8 @@ def run_pipeline():
             str(outline_width),
         ],
     ]
+    if rmbg_local_files_only:
+        commands[0].append("--rmbg-local-files-only")
 
     if process_mode != "clean":
         unfake_command = [
@@ -417,6 +477,9 @@ def run_pipeline():
         "sprite": output_dir / "sprite.png",
         "preview": preview_path,
         "mask": output_dir / "02_connected_bg_mask.png",
+        "rmbgAlpha": output_dir / "01_rmbg_alpha.png",
+        "classicMask": output_dir / "02_classic_bg_mask.png",
+        "rmbgMask": output_dir / "02_rmbg_bg_mask.png",
         "trimap": output_dir / "05_trimap.png",
         "subjectMask": output_dir / "06_subject_mask.png",
         "subjectMaskRgba": output_dir / "06_subject_mask_rgba.png",
@@ -428,6 +491,7 @@ def run_pipeline():
         "arrangedMaskRgba": output_dir / "10_arranged_mask_rgba.png",
         "componentsDebug": output_dir / "10_components_debug.png",
         "clustersDebug": output_dir / "10_clusters_debug.png",
+        "precleanMetadata": output_dir / "preclean_metadata.json",
         "arrangeReport": output_dir / "10_arrange_report.json",
         "report": output_dir / "report.json",
     }
@@ -441,6 +505,7 @@ def run_pipeline():
         {
             "ok": True,
             "processMode": process_mode,
+            "maskProvider": mask_provider,
             "input": str(input_path),
             "outputDir": str(output_dir),
             "artifacts": artifacts,
@@ -470,4 +535,4 @@ def static_asset(asset_path: str):
 
 if __name__ == "__main__":
     args = parse_args()
-    app.run(host=args.host, port=args.port, debug=False)
+    app.run(host=args.host, port=args.port, debug=False, threaded=True)

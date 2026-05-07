@@ -75,7 +75,7 @@ def venv_healthy(require_rmbg: bool = False) -> bool:
         return False
     probe_imports = "import flask, numpy, cv2, PIL, scipy, sklearn"
     if require_rmbg:
-        probe_imports += "; import torch, torchvision, transformers, kornia, huggingface_hub"
+        probe_imports += "; import torch, torchvision, transformers, kornia, timm, huggingface_hub"
     probe = subprocess.run(
         [
             str(py),
@@ -134,7 +134,11 @@ def ensure_runtime(allow_reexec: bool = True) -> None:
         install_environment()
     if allow_reexec:
         os.environ[BOOTSTRAP_FLAG] = "1"
-        os.execv(str(venv_python()), [str(venv_python()), str(Path(__file__).resolve()), *sys.argv[1:]])
+        completed = subprocess.run(
+            [str(venv_python()), str(Path(__file__).resolve()), *sys.argv[1:]],
+            cwd=str(ROOT),
+        )
+        raise SystemExit(completed.returncode)
 
 
 def check_unfake() -> tuple[bool, str]:
@@ -191,6 +195,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Pipeline mode.",
     )
     run_parser.add_argument("--bg-tolerance", type=int, default=14)
+    run_parser.add_argument(
+        "--mask-provider",
+        choices=["classic", "rmbg", "hybrid"],
+        default="classic",
+        help="Background mask source for preclean.",
+    )
+    run_parser.add_argument("--rmbg-bg-threshold", type=int, default=32, help="RMBG alpha value treated as background.")
+    run_parser.add_argument("--rmbg-fg-threshold", type=int, default=224, help="RMBG alpha value treated as sure foreground.")
+    run_parser.add_argument("--rmbg-device", default="auto", help="RMBG device: auto, cpu, cuda, etc.")
+    run_parser.add_argument(
+        "--rmbg-local-files-only",
+        dest="rmbg_local_files_only",
+        action="store_true",
+        default=True,
+        help="Use only cached RMBG model files.",
+    )
+    run_parser.add_argument(
+        "--rmbg-allow-download",
+        dest="rmbg_local_files_only",
+        action="store_false",
+        help="Allow RMBG model downloads during this run.",
+    )
     run_parser.add_argument(
         "--background-mode",
         choices=["edges", "corners", "midpoints"],
@@ -306,6 +332,16 @@ def handle_run(args: argparse.Namespace) -> int:
 
     if args.process_mode != "clean" and not check_unfake()[0]:
         raise SystemExit("unfake was not found on PATH. Install it before using safe/pixel modes.")
+    if args.mask_provider != "classic":
+        rmbg_status = probe_rmbg2(load_model=False)
+        if not rmbg_status.get("dependenciesAvailable", rmbg_status.get("available")):
+            message = rmbg_status.get("error") or "RMBG-2.0 is not ready. Run `python tools/cli.py init --with-rmbg`."
+            raise SystemExit(message)
+        if args.rmbg_local_files_only and not rmbg_status.get("modelCached"):
+            raise SystemExit(
+                "RMBG-2.0 model is not initialized locally. "
+                "Run `python tools/rmbg2.py download --warmup` or click 初始化 RMBG in the web UI.",
+            )
 
     result = execute_pipeline(
         args.input,
@@ -315,6 +351,11 @@ def handle_run(args: argparse.Namespace) -> int:
             alpha_threshold=args.alpha_threshold,
             edge_contract=args.edge_contract,
             outline_width=args.outline_width,
+            mask_provider=args.mask_provider,
+            rmbg_bg_threshold=args.rmbg_bg_threshold,
+            rmbg_fg_threshold=args.rmbg_fg_threshold,
+            rmbg_device=args.rmbg_device,
+            rmbg_local_files_only=args.rmbg_local_files_only,
             background_mode=args.background_mode,
             process_mode=args.process_mode,
             detect=args.detect,

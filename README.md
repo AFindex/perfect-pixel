@@ -28,13 +28,15 @@ python tools/cli.py init
 
 ```powershell
 python tools/cli.py init --with-rmbg
-python tools/rmbg2.py doctor --json
+python tools/rmbg2.py download --warmup --json
 ```
 
-需要预先下载并加载一次模型时可运行：
+也可以在 Web 面板中点击“初始化 RMBG”下载模型缓存。之后 Hybrid / RMBG 跑管线默认只读本地缓存，不会在每次运行时偷偷下载。
+
+需要只检查运行时状态时可运行：
 
 ```powershell
-python tools/cli.py init --with-rmbg --rmbg-warmup
+python tools/rmbg2.py doctor --json
 ```
 
 RMBG-2.0 的 Hugging Face 权重需要接受模型许可；如果是 gated 访问，请先配置 `HF_TOKEN` 或完成 `huggingface-cli login`。
@@ -81,6 +83,12 @@ python tools/cli.py run input.png
 - 保真 unfake：调用 `unfake --scale 1 --no-snap --colors 256`，避免自动降采样和自动降色。
 - 像素恢复：允许 `unfake` 自动检测 scale，用于确实要恢复像素网格的图；默认仍用 `--colors 256`，只有勾选“自动降色”才让 unfake 自己压色。
 
+## 抠图来源
+
+- `classic`：默认旧逻辑，OpenCV 从边缘连通近白区域识别背景。
+- `hybrid`：RMBG-2.0 补内部白底洞，仍用 classic 结果和近白色判断兜底，适合优先试的新方案。
+- `rmbg`：直接使用 RMBG-2.0 alpha 做粗 mask，再走现有白边收缩、去污染、描边和 QA。
+
 输出目录旁边的“选择”按钮需要本地后端运行，它会打开系统目录选择器。
 
 ## 描边相关输出
@@ -116,7 +124,7 @@ python tools/cli.py run input.png --arrange-sprites --arrange-columns 4 --arrang
 ## 当前管线
 
 1. 导入与标准化：Pillow 读取输入，统一 RGBA。
-2. 纯色背景识别：OpenCV 从边缘连通区域识别近似白底。
+2. 粗 mask 识别：可用 OpenCV 边缘连通近白底、RMBG-2.0 alpha，或 hybrid 融合。
 3. Mask 与 Trimap：OpenCV morphology 生成 sure foreground、edge band、trimap、主体 mask、描边 mask。
 4. 白边去污染：PyMatting 或最近 sure foreground 颜色替换。
 5. unfake 像素恢复：复用本机 `unfake` CLI。
@@ -127,7 +135,7 @@ python tools/cli.py run input.png --arrange-sprites --arrange-columns 4 --arrang
 ## 可跑的最小命令链
 
 ```powershell
-python tools/preclean.py input.png --output-dir build/perfect-pixel --bg-tolerance 14 --background-mode edges --alpha-threshold 128 --edge-contract 1 --outline-width 2
+python tools/preclean.py input.png --output-dir build/perfect-pixel --bg-tolerance 14 --mask-provider classic --rmbg-local-files-only --background-mode edges --alpha-threshold 128 --edge-contract 1 --outline-width 2
 unfake build/perfect-pixel/07_clean_rgba.png -o build/perfect-pixel/08_unfake_pixel_raw.png --detect auto --method dominant --transparent-background --background-tolerance 14 --background-mode edges --cleanup morph,jaggy --auto-colors
 python tools/postcheck.py build/perfect-pixel/08_unfake_pixel_raw.png --output-dir build/perfect-pixel --preview-scale 16
 ```

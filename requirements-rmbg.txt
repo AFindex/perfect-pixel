@@ -1,5 +1,6 @@
 huggingface-hub>=0.23,<2
 kornia>=0.7
+timm>=0.9
 torch>=2.2,<2.8
 torchvision>=0.17,<0.23
 transformers>=4.39,<6

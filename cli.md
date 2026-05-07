@@ -22,7 +22,7 @@ python tools/cli.py init --with-rmbg
 需要下载并加载一次模型时：
 
 ```powershell
-python tools/cli.py init --with-rmbg --rmbg-warmup
+python tools/rmbg2.py download --warmup --json
 ```
 
 也可以直接检查独立包装器：
@@ -69,6 +69,11 @@ python tools/cli.py run input.png
 常用参数：
 
 - `--process-mode clean|safe|pixel`
+- `--mask-provider classic|hybrid|rmbg`
+- `--rmbg-bg-threshold`
+- `--rmbg-fg-threshold`
+- `--rmbg-local-files-only`
+- `--rmbg-allow-download`
 - `--next-subdir`
 - `--bg-tolerance`
 - `--background-mode`

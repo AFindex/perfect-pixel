@@ -596,6 +596,45 @@ h2 {
   background: #fff;
 }
 
+.model-panel {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 15px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: #fff;
+}
+
+.model-status-row {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.model-status-row span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.model-status-row strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.model-status-row strong[data-state="ready"] {
+  color: var(--teal);
+}
+
+.model-status-row strong[data-state="missing"],
+.model-status-row strong[data-state="error"] {
+  color: var(--coral);
+}
+
 .arrange-toggle {
   margin-bottom: 0;
 }

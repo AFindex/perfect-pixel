@@ -23,6 +23,11 @@ class PipelineSettings:
     alpha_threshold: int = 128
     edge_contract: int = 1
     outline_width: int = 2
+    mask_provider: str = "classic"
+    rmbg_bg_threshold: int = 32
+    rmbg_fg_threshold: int = 224
+    rmbg_device: str = "auto"
+    rmbg_local_files_only: bool = True
     background_mode: str = "edges"
     process_mode: str = "clean"
     detect: str = "auto"
@@ -130,7 +135,7 @@ def run_command(command: list[str], cwd: Path) -> dict[str, object]:
         cwd=str(cwd),
         capture_output=True,
         text=True,
-        timeout=180,
+        timeout=600,
     )
     return {
         "command": command,
@@ -144,6 +149,9 @@ def run_command(command: list[str], cwd: Path) -> dict[str, object]:
 def cleanup_stale_outputs(output_dir: Path) -> None:
     stale_paths = [
         output_dir / "07_clean_rgba.png",
+        output_dir / "01_rmbg_alpha.png",
+        output_dir / "02_classic_bg_mask.png",
+        output_dir / "02_rmbg_bg_mask.png",
         output_dir / "08_unfake_pixel_raw.png",
         output_dir / "sprite.png",
         output_dir / "report.json",
@@ -185,6 +193,14 @@ def build_pipeline_commands(
             str(output_dir),
             "--bg-tolerance",
             str(settings.bg_tolerance),
+            "--mask-provider",
+            settings.mask_provider,
+            "--rmbg-bg-threshold",
+            str(settings.rmbg_bg_threshold),
+            "--rmbg-fg-threshold",
+            str(settings.rmbg_fg_threshold),
+            "--rmbg-device",
+            settings.rmbg_device,
             "--background-mode",
             settings.background_mode,
             "--alpha-threshold",
@@ -195,6 +211,8 @@ def build_pipeline_commands(
             str(settings.outline_width),
         ],
     ]
+    if settings.rmbg_local_files_only:
+        commands[0].append("--rmbg-local-files-only")
 
     if settings.process_mode != "clean":
         unfake_command = [
@@ -293,6 +311,9 @@ def artifact_map(
         "sprite": output_dir / "sprite.png",
         "preview": preview_path,
         "mask": output_dir / "02_connected_bg_mask.png",
+        "rmbgAlpha": output_dir / "01_rmbg_alpha.png",
+        "classicMask": output_dir / "02_classic_bg_mask.png",
+        "rmbgMask": output_dir / "02_rmbg_bg_mask.png",
         "trimap": output_dir / "05_trimap.png",
         "subjectMask": output_dir / "06_subject_mask.png",
         "subjectMaskRgba": output_dir / "06_subject_mask_rgba.png",
@@ -362,6 +383,7 @@ def run_pipeline(
     return {
         "ok": True,
         "processMode": settings.process_mode,
+        "maskProvider": settings.mask_provider,
         "input": str(input_path),
         "outputDir": str(output_dir),
         "artifacts": artifacts,

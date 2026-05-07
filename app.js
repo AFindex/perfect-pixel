@@ -1,5 +1,6 @@
 const state = {
   backgroundMode: "edges",
+  maskProvider: "classic",
   processMode: "clean",
   previewUrl: "",
   selectedFile: null,
@@ -15,17 +16,17 @@ const steps = {
     reuse: "Pillow, pathlib",
     input: "AI 生成 PNG / JPG",
     output: "RGBA 图像, debug 目录",
-    artifacts: ["00_input_rgba.png", "metadata.json"],
+    artifacts: ["00_input_rgba.png", "preclean_metadata.json"],
   },
   background: {
     phase: "阶段 02",
     title: "纯色背景识别",
     summary:
-      "从四边估计近似背景色，只保留和画布边缘连通的近背景区域，避免误删主体里的白色高光。",
-    reuse: "OpenCV connectedComponents / floodFill, Lab color distance",
-    input: "RGBA 图像, 背景容差, edge/corner seed",
-    output: "near_bg.png, connected_bg_mask.png",
-    artifacts: ["01_near_bg.png", "02_connected_bg_mask.png"],
+      "可用旧的边缘连通近白底、RMBG-2.0 alpha，或 hybrid 融合方式生成粗 mask。",
+    reuse: "OpenCV connectedComponents / Lab color distance, optional RMBG-2.0",
+    input: "RGBA 图像, mask provider, 背景容差, edge/corner seed",
+    output: "01_near_bg.png, 01_rmbg_alpha.png, 02_connected_bg_mask.png",
+    artifacts: ["01_near_bg.png", "01_rmbg_alpha.png", "02_classic_bg_mask.png", "02_rmbg_bg_mask.png", "02_connected_bg_mask.png"],
   },
   trimap: {
     phase: "阶段 03",
@@ -102,6 +103,8 @@ const controls = {
   runPipelineButton: qs("#runPipelineButton"),
   runStatus: qs("#runStatus"),
   resultBody: qs("#resultBody"),
+  initRmbgButton: qs("#initRmbgButton"),
+  rmbgStatus: qs("#rmbgStatus"),
   pickOutputDirButton: qs("#pickOutputDirButton"),
   inputHistoryButton: qs("#inputHistoryButton"),
   inputHistoryPanel: qs("#inputHistoryPanel"),
@@ -155,6 +158,7 @@ const pipelineProgress = {
   stages: [],
   activeIndex: -1,
 };
+let rmbgModelReady = false;
 const historyConfig = {
   input: {
     key: "perfectPixel.inputHistory",
@@ -184,6 +188,10 @@ const helpTips = [
   {
     selector: "#processModeField",
     help: "只清理会保留 07_clean_rgba 作为正式结果；保真 unfake 会禁止缩放和网格吸附；像素恢复会让 unfake 尝试识别像素网格，可能更像像素图但也更容易改变细节。",
+  },
+  {
+    selector: "#maskProviderField",
+    help: "classic 是旧的边缘连通白底；hybrid 用旧 mask 作安全锚点并让 RMBG 补内部白底洞；RMBG 完全按 RMBG-2.0 alpha 做粗抠图。",
   },
   {
     selector: "#backgroundModeField",
@@ -521,6 +529,7 @@ function writePresets(presets) {
 function collectParameterSettings() {
   return {
     processMode: state.processMode,
+    maskProvider: state.maskProvider,
     backgroundMode: state.backgroundMode,
     bgTolerance: controls.bgTolerance.value,
     alphaThreshold: controls.alphaThreshold.value,
@@ -551,6 +560,7 @@ function setSegmentValue(setting, value) {
 
 function applyParameterSettings(settings) {
   setSegmentValue("processMode", settings.processMode || "clean");
+  setSegmentValue("maskProvider", settings.maskProvider || "classic");
   setSegmentValue("backgroundMode", settings.backgroundMode || "edges");
   controls.bgTolerance.value = settings.bgTolerance ?? "14";
   controls.alphaThreshold.value = settings.alphaThreshold ?? "128";
@@ -580,6 +590,7 @@ function presetSummary(settings) {
   }[settings.processMode] || settings.processMode;
   return [
     modeLabel,
+    settings.maskProvider && settings.maskProvider !== "classic" ? `mask ${settings.maskProvider}` : "",
     `bg ${settings.bgTolerance}`,
     `alpha ${settings.alphaThreshold}`,
     `edge ${settings.edgeContract}`,
@@ -684,6 +695,27 @@ function currentRunStages() {
   return controls.arrangeSprites.checked ? [...stages, "arrange"] : stages;
 }
 
+function syncStageCards() {
+  const stages = currentRunStages();
+  let selectedVisible = false;
+  qsa(".stage-card").forEach((card) => {
+    const index = stages.indexOf(card.dataset.step);
+    const visible = index >= 0;
+    card.hidden = !visible;
+    card.setAttribute("aria-hidden", visible ? "false" : "true");
+    const indexLabel = card.querySelector(".stage-index");
+    if (indexLabel && visible) {
+      indexLabel.textContent = String(index + 1).padStart(2, "0");
+    }
+    if (visible && card.classList.contains("is-selected")) {
+      selectedVisible = true;
+    }
+  });
+  if (!selectedVisible) {
+    selectStep(stages[0]);
+  }
+}
+
 function clearStageProgress() {
   qsa(".stage-card").forEach((card) => {
     card.classList.remove("is-running", "is-complete", "is-failed");
@@ -718,16 +750,21 @@ function stopStageProgressTimer() {
   pipelineProgress.timer = 0;
 }
 
+function precleanHoldStage(stages) {
+  return Math.max(0, stages.indexOf("defringe"));
+}
+
 function startStageProgress() {
   stopStageProgressTimer();
+  syncStageCards();
   const stages = currentRunStages();
+  const holdIndex = precleanHoldStage(stages);
   pipelineProgress.stages = stages;
   pipelineProgress.activeIndex = 0;
   setStageProgress(stages[0], stages);
 
   pipelineProgress.timer = window.setInterval(() => {
-    const lastIndex = stages.length - 1;
-    pipelineProgress.activeIndex = Math.min(pipelineProgress.activeIndex + 1, lastIndex);
+    pipelineProgress.activeIndex = Math.min(pipelineProgress.activeIndex + 1, holdIndex);
     setStageProgress(stages[pipelineProgress.activeIndex], stages);
   }, STAGE_PROGRESS_INTERVAL_MS);
 }
@@ -752,9 +789,11 @@ function finishStageProgress() {
 function stageFromRunError(data) {
   const logs = Array.isArray(data?.logs) ? data.logs : [];
   const failedCommand = Array.isArray(data?.failedCommand) ? data.failedCommand.join(" ") : "";
+  const stderr = logs.map((log) => String(log.stderr || "")).join("\n");
   if (/arrange_sprites\.py/.test(failedCommand)) return "arrange";
   if (/postcheck\.py/.test(failedCommand)) return "qa";
   if (/unfake/.test(failedCommand)) return "unfake";
+  if (/preclean\.py/.test(failedCommand) && /RMBG|rmbg/i.test(stderr)) return "background";
   if (/preclean\.py/.test(failedCommand)) return "defringe";
   if (!logs.length) return pipelineProgress.stages[pipelineProgress.activeIndex] || "ingest";
   if (logs.length <= 1) return "defringe";
@@ -800,7 +839,7 @@ function buildCommand() {
   const postColors = controls.autoColors.checked ? "" : ` --colors ${controls.colors.value}`;
   const lines = [
     "# 01-04 先跑 preclean.py，生成干净透明底 07_clean_rgba.png",
-    `python tools/preclean.py ${quotePath(input)} --output-dir ${quotePath(outputDir)} --bg-tolerance ${controls.bgTolerance.value} --background-mode ${state.backgroundMode} --alpha-threshold ${controls.alphaThreshold.value} --edge-contract ${controls.edgeContract.value} --outline-width ${controls.outlineWidth.value}`,
+    `python tools/preclean.py ${quotePath(input)} --output-dir ${quotePath(outputDir)} --bg-tolerance ${controls.bgTolerance.value} --mask-provider ${state.maskProvider} --rmbg-bg-threshold 32 --rmbg-fg-threshold 224 --rmbg-local-files-only --background-mode ${state.backgroundMode} --alpha-threshold ${controls.alphaThreshold.value} --edge-contract ${controls.edgeContract.value} --outline-width ${controls.outlineWidth.value}`,
   ];
 
   if (shouldRunUnfake()) {
@@ -883,6 +922,18 @@ function syncModeControls() {
     control.disabled = arrangeDisabled;
   });
   controls.arrangeOptions.classList.toggle("is-disabled", arrangeDisabled);
+
+  const usesRmbg = state.maskProvider !== "classic";
+  if (controls.initRmbgButton) {
+    controls.initRmbgButton.disabled = rmbgModelReady || controls.initRmbgButton.dataset.busy === "true";
+  }
+  controls.runPipelineButton.disabled = usesRmbg && !rmbgModelReady;
+  if (usesRmbg && !rmbgModelReady && controls.runStatus.textContent !== "运行中") {
+    setRunStatus("请先初始化 RMBG");
+  } else if ((!usesRmbg || rmbgModelReady) && controls.runStatus.textContent === "请先初始化 RMBG") {
+    setRunStatus("Ready");
+  }
+  syncStageCards();
 }
 
 function renderCommand() {
@@ -927,6 +978,11 @@ function appendRunSettings(form) {
   form.append("output_dir", getEffectiveOutputDir());
   form.append("process_mode", state.processMode);
   form.append("bg_tolerance", controls.bgTolerance.value);
+  form.append("mask_provider", state.maskProvider);
+  form.append("rmbg_bg_threshold", "32");
+  form.append("rmbg_fg_threshold", "224");
+  form.append("rmbg_device", "auto");
+  form.append("rmbg_local_files_only", "true");
   form.append("background_mode", state.backgroundMode);
   form.append("alpha_threshold", controls.alphaThreshold.value);
   form.append("edge_contract", controls.edgeContract.value);
@@ -950,6 +1006,60 @@ function appendRunSettings(form) {
 
 function setRunStatus(label) {
   controls.runStatus.textContent = label;
+}
+
+function setRmbgStatus(label, stateName = "unknown") {
+  if (!controls.rmbgStatus) return;
+  controls.rmbgStatus.textContent = label;
+  controls.rmbgStatus.dataset.state = stateName;
+}
+
+async function refreshRmbgStatus() {
+  if (!controls.rmbgStatus) return;
+  setRmbgStatus("检查中", "checking");
+  try {
+    const response = await fetch(`${API_BASE}/api/rmbg/status`);
+    const data = await response.json();
+    const status = data.rmbg2 || {};
+    rmbgModelReady = Boolean(status.dependenciesAvailable && status.modelCached);
+    if (!status.dependenciesAvailable) {
+      setRmbgStatus("依赖缺失", "error");
+    } else if (status.modelCached) {
+      setRmbgStatus("已初始化", "ready");
+    } else {
+      setRmbgStatus(status.hfTokenConfigured ? "未下载" : "未登录", "missing");
+    }
+  } catch {
+    rmbgModelReady = false;
+    setRmbgStatus("不可用", "error");
+  }
+  syncModeControls();
+}
+
+async function initializeRmbg() {
+  if (!controls.initRmbgButton) return;
+  controls.initRmbgButton.dataset.busy = "true";
+  controls.initRmbgButton.disabled = true;
+  setRmbgStatus("初始化中", "checking");
+  try {
+    const form = new FormData();
+    form.append("warmup", "true");
+    const response = await fetch(`${API_BASE}/api/rmbg/download`, {
+      method: "POST",
+      body: form,
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || "RMBG 初始化失败");
+    }
+    showToast("RMBG 已初始化");
+  } catch (error) {
+    showToast(error.message || "RMBG 初始化失败");
+  } finally {
+    controls.initRmbgButton.dataset.busy = "false";
+    controls.initRmbgButton.disabled = false;
+    await refreshRmbgStatus();
+  }
 }
 
 function commandToString(command) {
@@ -983,7 +1093,11 @@ function renderResult(data) {
     ["outlineMaskRgba", "透明描边 mask"],
     ["outlineMask", "黑白描边 mask"],
     ["mask", "背景 mask"],
+    ["rmbgAlpha", "RMBG alpha"],
+    ["classicMask", "classic mask"],
+    ["rmbgMask", "RMBG mask"],
     ["trimap", "trimap"],
+    ["precleanMetadata", "preclean_metadata.json"],
     ["arrangeReport", "arrange_report.json"],
     ["report", "report.json"],
   ].filter(([key]) => artifacts[key]);
@@ -998,6 +1112,7 @@ function renderResult(data) {
     ["subjectMaskRgba", "填充 mask", "透明背景，主体区域"],
     ["outlineMaskRgba", "描边 mask", "透明背景，外扩描边环"],
     ["mask", "背景 mask", "黑白调试图"],
+    ["rmbgAlpha", "RMBG alpha", "RMBG-2.0 输出的软 alpha"],
     ["trimap", "trimap", "前景 / 边缘 / 背景"],
   ].filter(([key]) => artifacts[key]);
 
@@ -1007,6 +1122,7 @@ function renderResult(data) {
   summary.className = "run-summary";
   [
     ["模式", data.processMode === "clean" ? "只清理" : data.processMode],
+    ["抠图", data.maskProvider || state.maskProvider || "classic"],
     ["尺寸", Array.isArray(report.size) ? `${report.size[0]} x ${report.size[1]}` : "-"],
     ["可见色", Number.isFinite(report.visible_color_count) ? String(report.visible_color_count) : "-"],
     [
@@ -1168,6 +1284,11 @@ async function runPipeline() {
     showToast("先拖入图片或填写输入路径");
     return;
   }
+  if (state.maskProvider !== "classic" && !rmbgModelReady) {
+    showToast("请先初始化 RMBG");
+    await refreshRmbgStatus();
+    return;
+  }
 
   const form = new FormData();
   if (state.selectedFile) {
@@ -1208,8 +1329,8 @@ async function runPipeline() {
     );
     showToast("管线执行失败");
   } finally {
-    controls.runPipelineButton.disabled = false;
     controls.runPipelineButton.textContent = "运行管线";
+    syncModeControls();
   }
 }
 
@@ -1413,6 +1534,7 @@ function bindEvents() {
   });
 
   controls.runPipelineButton.addEventListener("click", runPipeline);
+  controls.initRmbgButton.addEventListener("click", initializeRmbg);
   controls.pickOutputDirButton.addEventListener("click", pickOutputDirectory);
   qs("#exportPlanButton").addEventListener("click", exportPlan);
 }
@@ -1425,3 +1547,4 @@ renderHistoryPanel("output");
 renderPresetList();
 selectStep("ingest");
 renderCommand();
+refreshRmbgStatus();

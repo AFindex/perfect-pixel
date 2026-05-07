@@ -5,11 +5,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
 from PIL import Image
+
+if __package__ in {None, ""}:
+    ROOT = Path(__file__).resolve().parents[1]
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
 
 try:
     from scipy import ndimage
@@ -24,6 +30,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bg-tolerance", type=float, default=8)
     parser.add_argument("--alpha-threshold", type=int, default=128)
     parser.add_argument(
+        "--mask-provider",
+        choices=["classic", "rmbg", "hybrid"],
+        default="classic",
+        help="Use classic edge-connected color mask, RMBG-2.0 alpha, or a fused hybrid mask.",
+    )
+    parser.add_argument(
         "--background-mode",
         choices=["edges", "corners", "midpoints"],
         default="edges",
@@ -31,6 +43,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--edge-contract", type=int, default=1)
     parser.add_argument("--outline-width", type=int, default=2)
     parser.add_argument("--kernel", type=int, default=3)
+    parser.add_argument("--rmbg-bg-threshold", type=int, default=32)
+    parser.add_argument("--rmbg-fg-threshold", type=int, default=224)
+    parser.add_argument("--rmbg-device", default="auto")
+    parser.add_argument("--rmbg-cache-dir", type=Path)
+    parser.add_argument("--rmbg-local-files-only", dest="rmbg_local_files_only", action="store_true", default=True)
+    parser.add_argument("--rmbg-allow-download", dest="rmbg_local_files_only", action="store_false")
     return parser.parse_args()
 
 
@@ -107,6 +125,49 @@ def make_outline_mask(subject: np.ndarray, width: int) -> np.ndarray:
     return dilated & ~subject
 
 
+def clamp_u8(value: int) -> int:
+    return max(0, min(255, int(value)))
+
+
+def clean_mask(mask: np.ndarray, kernel_size: int) -> np.ndarray:
+    kernel_size = max(1, int(kernel_size))
+    kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
+    cleaned = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_CLOSE, kernel).astype(bool)
+    return cv2.morphologyEx(cleaned.astype(np.uint8), cv2.MORPH_OPEN, kernel).astype(bool)
+
+
+def erode_mask(mask: np.ndarray, amount: int) -> np.ndarray:
+    amount = max(0, int(amount))
+    if amount == 0:
+        return mask.copy()
+    kernel = np.ones((amount * 2 + 1, amount * 2 + 1), dtype=np.uint8)
+    return cv2.erode(mask.astype(np.uint8), kernel).astype(bool)
+
+
+def rmbg_alpha_from_image(image: Image.Image, args: argparse.Namespace) -> np.ndarray:
+    try:
+        from tools.rmbg2 import Rmbg2Session, Rmbg2Settings, Rmbg2UnavailableError
+    except Exception as exc:  # noqa: BLE001 - CLI should show a direct setup hint.
+        raise RuntimeError("RMBG-2.0 wrapper is unavailable. Run `python tools/cli.py init --with-rmbg`.") from exc
+
+    try:
+        session = Rmbg2Session(
+            Rmbg2Settings(
+                device=args.rmbg_device,
+                cache_dir=args.rmbg_cache_dir,
+                local_files_only=args.rmbg_local_files_only,
+            ),
+        )
+        return np.asarray(session.predict_alpha(image), dtype=np.uint8)
+    except Rmbg2UnavailableError as exc:
+        raise RuntimeError(str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - keep preclean failure readable.
+        raise RuntimeError(
+            "RMBG-2.0 inference failed. Check optional dependencies, model access, "
+            "and HF_TOKEN / Hugging Face login if the model is gated.",
+        ) from exc
+
+
 def decontaminate_edge(rgb: np.ndarray, clean: np.ndarray, edge_band: np.ndarray, sure_fg: np.ndarray) -> None:
     if not edge_band.any() or not sure_fg.any() or ndimage is None:
         return
@@ -138,20 +199,40 @@ def main() -> None:
         (lab_distance <= args.bg_tolerance * 2.25)
         | (rgb_distance <= args.bg_tolerance * 2.0)
     ) & (alpha >= args.alpha_threshold)
-    background = connected_background(near_bg, args.background_mode)
+    classic_background = connected_background(near_bg, args.background_mode)
 
-    kernel_size = max(1, int(args.kernel))
-    kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
-    background = cv2.morphologyEx(background.astype(np.uint8), cv2.MORPH_CLOSE, kernel).astype(bool)
-    background = cv2.morphologyEx(background.astype(np.uint8), cv2.MORPH_OPEN, kernel).astype(bool)
+    rmbg_alpha = None
+    rmbg_background = None
+    visible = alpha >= args.alpha_threshold
+    rmbg_bg_threshold = clamp_u8(args.rmbg_bg_threshold)
+    rmbg_fg_threshold = clamp_u8(args.rmbg_fg_threshold)
+    if args.mask_provider in {"rmbg", "hybrid"}:
+        try:
+            rmbg_alpha = rmbg_alpha_from_image(image, args)
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from None
+        rmbg_background = (rmbg_alpha <= rmbg_bg_threshold) & visible
 
-    foreground = (~background) & (alpha >= args.alpha_threshold)
-    erode_size = max(0, int(args.edge_contract))
-    if erode_size:
-        erode_kernel = np.ones((erode_size * 2 + 1, erode_size * 2 + 1), dtype=np.uint8)
-        sure_fg = cv2.erode(foreground.astype(np.uint8), erode_kernel).astype(bool)
+    if args.mask_provider == "classic":
+        background = classic_background
+    elif args.mask_provider == "rmbg":
+        background = rmbg_background
     else:
-        sure_fg = foreground.copy()
+        # Hybrid keeps the old edge-connected mask as the safe anchor, then lets
+        # RMBG remove interior white background holes only when the color still
+        # looks like the estimated canvas background.
+        background = classic_background | (rmbg_background & near_bg)
+
+    background = clean_mask(background, args.kernel)
+    foreground = (~background) & visible
+    sure_fg_seed = foreground
+    if rmbg_alpha is not None:
+        rmbg_sure = (rmbg_alpha >= rmbg_fg_threshold) & foreground
+        if rmbg_sure.any():
+            sure_fg_seed = rmbg_sure
+    sure_fg = erode_mask(sure_fg_seed, args.edge_contract)
+    if not sure_fg.any() and foreground.any():
+        sure_fg = erode_mask(foreground, args.edge_contract)
 
     edge_band = foreground & ~sure_fg
     strict_bg = (lab_distance <= max(1.0, args.bg_tolerance * 1.45)) | (
@@ -167,6 +248,10 @@ def main() -> None:
     outline_mask = make_outline_mask(subject_mask, args.outline_width)
 
     save_mask(args.output_dir / "01_near_bg.png", near_bg)
+    if rmbg_alpha is not None:
+        Image.fromarray(rmbg_alpha, mode="L").save(args.output_dir / "01_rmbg_alpha.png")
+        save_mask(args.output_dir / "02_classic_bg_mask.png", clean_mask(classic_background, args.kernel))
+        save_mask(args.output_dir / "02_rmbg_bg_mask.png", clean_mask(rmbg_background, args.kernel))
     save_mask(args.output_dir / "02_connected_bg_mask.png", background)
     save_mask(args.output_dir / "03_sure_fg.png", sure_fg)
     save_mask(args.output_dir / "04_edge_band.png", edge_band)
@@ -181,11 +266,16 @@ def main() -> None:
         "input": str(args.input),
         "size": [w, h],
         "estimated_background_rgb": bg_rgb.tolist(),
+        "mask_provider": args.mask_provider,
         "bg_tolerance": args.bg_tolerance,
         "background_mode": args.background_mode,
         "alpha_threshold": args.alpha_threshold,
         "edge_contract": args.edge_contract,
         "outline_width": args.outline_width,
+        "rmbg_bg_threshold": rmbg_bg_threshold if rmbg_alpha is not None else None,
+        "rmbg_fg_threshold": rmbg_fg_threshold if rmbg_alpha is not None else None,
+        "rmbg_device": args.rmbg_device if rmbg_alpha is not None else None,
+        "rmbg_local_files_only": args.rmbg_local_files_only if rmbg_alpha is not None else None,
         "scipy_decontaminate": ndimage is not None,
     }
     (args.output_dir / "preclean_metadata.json").write_text(

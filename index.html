@@ -112,6 +112,23 @@
             </div>
           </div>
 
+          <div class="field" id="maskProviderField">
+            <span>抠图来源</span>
+            <div class="segmented mode-segmented" role="group" aria-label="抠图来源">
+              <button class="segment is-active" data-setting="maskProvider" data-value="classic" type="button">classic</button>
+              <button class="segment" data-setting="maskProvider" data-value="hybrid" type="button">hybrid</button>
+              <button class="segment" data-setting="maskProvider" data-value="rmbg" type="button">RMBG</button>
+            </div>
+          </div>
+
+          <div class="model-panel" id="rmbgModelPanel">
+            <div class="model-status-row">
+              <span>RMBG-2.0</span>
+              <strong id="rmbgStatus" data-state="unknown">检查中</strong>
+            </div>
+            <button class="mini-button" id="initRmbgButton" type="button">初始化 RMBG</button>
+          </div>
+
           <div class="field" id="backgroundModeField">
             <span>背景模式</span>
             <div class="segmented" role="group" aria-label="背景模式">

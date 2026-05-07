@@ -3,7 +3,7 @@
 ```mermaid
 flowchart LR
   A["AI image<br/>PNG/JPG"] --> B["Preclean<br/>Pillow RGBA"]
-  B --> C["Solid background mask<br/>OpenCV edge-connected"]
+  B --> C["Coarse background mask<br/>OpenCV / RMBG-2.0 / hybrid"]
   C --> D["Trimap<br/>OpenCV morphology"]
   D --> M["Outline masks<br/>subject + outline ring"]
   M --> E["Defringe<br/>PyMatting or nearest foreground"]
@@ -22,7 +22,7 @@ flowchart LR
 | Stage | Reuse | Purpose |
 | --- | --- | --- |
 | Input normalization | Pillow | Read/write PNG and convert RGBA |
-| Solid background mask | OpenCV | Connected components, flood-style edge mask, morphology |
+| Coarse background mask | OpenCV / RMBG-2.0 | Connected components, RMBG alpha matte, hybrid fusion, morphology |
 | Outline masks | OpenCV | Export solid subject mask and dilated outline-ring mask |
 | Defringe | PyMatting / scipy | Remove white matte color contamination around edges |
 | Pixel restore | unfake CLI | Scale detection, grid snap, dominant/content-adaptive downscale |

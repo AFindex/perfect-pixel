@@ -243,7 +243,7 @@ const helpTips = [
   },
   {
     selector: "#arrangeSplitMode",
-    help: "clustered 会先找 mask 小岛，再把距离较近、大小关系像同一素材的组件聚成一个元素；connected 是旧逻辑，只按膨胀后的连通区域切分。",
+    help: "auto 复用 scikit-learn AffinityPropagation，从组件相似度矩阵自动决定簇数量；clustered 是手动距离聚合；connected 是旧逻辑。",
   },
   {
     selector: "#arrangePadding",
@@ -255,7 +255,7 @@ const helpTips = [
   },
   {
     selector: "#arrangeMergeGap",
-    help: "聚合距离。值越大，越倾向把断开的武器、发丝、高光、投影并入同一个元素；过大可能把相邻两个素材合并。",
+    help: "auto 模式下作为自动推断的参考距离，通常不用精确调；clustered 模式下就是显式聚合距离。值越大越容易把断岛并入同一元素。",
   },
 ];
 
@@ -564,7 +564,7 @@ function applyParameterSettings(settings) {
   controls.cleanupJaggy.checked = Boolean(settings.cleanupJaggy);
   controls.useTransparent.checked = settings.useTransparent !== false;
   controls.arrangeSprites.checked = Boolean(settings.arrangeSprites);
-  controls.arrangeSplitMode.value = settings.arrangeSplitMode || "clustered";
+  controls.arrangeSplitMode.value = settings.arrangeSplitMode || "auto";
   controls.arrangeColumns.value = settings.arrangeColumns ?? "0";
   controls.arrangePadding.value = settings.arrangePadding ?? "2";
   controls.arrangeMinArea.value = settings.arrangeMinArea ?? "16";
@@ -585,7 +585,7 @@ function presetSummary(settings) {
     `edge ${settings.edgeContract}`,
     `outline ${settings.outlineWidth}`,
     settings.processMode === "clean" ? "" : `${settings.method}/${settings.detect}`,
-    settings.arrangeSprites ? `重排 ${settings.arrangeSplitMode || "clustered"} / ${settings.arrangeColumns || 0}列` : "",
+    settings.arrangeSprites ? `重排 ${settings.arrangeSplitMode || "auto"} / ${settings.arrangeColumns || 0}列` : "",
   ]
     .filter(Boolean)
     .join(" · ");
@@ -669,6 +669,10 @@ function getCleanupOptions() {
   if (controls.cleanupMorph.checked) options.push("morph");
   if (controls.cleanupJaggy.checked) options.push("jaggy");
   return options;
+}
+
+function arrangeLegacyMergeGap() {
+  return controls.arrangeSplitMode.value === "connected" ? controls.arrangeMergeGap.value : "2";
 }
 
 function shouldRunUnfake() {
@@ -847,7 +851,7 @@ function buildCommand() {
     lines.push(
       "",
       "# 08 可选：按最终透明 mask 切分组件，统一 cell 大小后重排成精灵表",
-      `python tools/arrange_sprites.py ${quotePath(spriteOutput)} --output-dir ${quotePath(outputDir)} --columns ${controls.arrangeColumns.value} --padding ${controls.arrangePadding.value} --min-area ${controls.arrangeMinArea.value} --split-mode ${controls.arrangeSplitMode.value} --merge-gap ${controls.arrangeMergeGap.value} --cluster-gap ${controls.arrangeMergeGap.value} --cluster-gap-ratio 0.5 --preview-scale 16 --max-preview-side 4096`,
+      `python tools/arrange_sprites.py ${quotePath(spriteOutput)} --output-dir ${quotePath(outputDir)} --columns ${controls.arrangeColumns.value} --padding ${controls.arrangePadding.value} --min-area ${controls.arrangeMinArea.value} --split-mode ${controls.arrangeSplitMode.value} --merge-gap ${arrangeLegacyMergeGap()} --cluster-gap ${controls.arrangeMergeGap.value} --cluster-gap-ratio 0.5 --preview-scale 16 --max-preview-side 4096`,
     );
   }
 
@@ -939,7 +943,7 @@ function appendRunSettings(form) {
   form.append("arrange_columns", controls.arrangeColumns.value);
   form.append("arrange_padding", controls.arrangePadding.value);
   form.append("arrange_min_area", controls.arrangeMinArea.value);
-  form.append("arrange_merge_gap", controls.arrangeMergeGap.value);
+  form.append("arrange_merge_gap", arrangeLegacyMergeGap());
   form.append("arrange_cluster_gap", controls.arrangeMergeGap.value);
   form.append("arrange_cluster_gap_ratio", "0.5");
 }

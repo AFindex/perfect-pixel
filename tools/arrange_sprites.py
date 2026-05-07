@@ -23,9 +23,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-area", type=int, default=16, help="Ignore mask components smaller than this.")
     parser.add_argument(
         "--split-mode",
-        choices=["clustered", "connected"],
-        default="clustered",
-        help="clustered groups nearby mask islands into one element; connected keeps the legacy dilation split.",
+        choices=["auto", "clustered", "connected"],
+        default="auto",
+        help="auto uses scikit-learn AffinityPropagation; clustered uses explicit gaps; connected keeps legacy dilation splitting.",
     )
     parser.add_argument(
         "--merge-gap",
@@ -257,6 +257,96 @@ def clustered_boxes(
     return boxes
 
 
+def distance_matrix(components: list[dict[str, object]]) -> np.ndarray:
+    count = len(components)
+    distances = np.zeros((count, count), dtype=np.float64)
+    for i, first in enumerate(components):
+        for j in range(i + 1, count):
+            distance = bbox_distance(first["source_bbox"], components[j]["source_bbox"])
+            distances[i, j] = distance
+            distances[j, i] = distance
+    return distances
+
+
+def boxes_from_labels(
+    components: list[dict[str, object]],
+    labels: np.ndarray,
+) -> list[dict[str, object]]:
+    groups: dict[int, list[dict[str, object]]] = {}
+    for index, label in enumerate(labels):
+        groups.setdefault(int(label), []).append(components[index])
+
+    boxes = []
+    for group in groups.values():
+        x0 = min(int(item["source_bbox"][0]) for item in group)
+        y0 = min(int(item["source_bbox"][1]) for item in group)
+        x1 = max(int(item["source_bbox"][2]) for item in group)
+        y1 = max(int(item["source_bbox"][3]) for item in group)
+        area = int(sum(int(item["area"]) for item in group))
+        labels_in_group = [int(item["label"]) for item in group]
+        center_x = sum(float(item["center"][0]) * int(item["area"]) for item in group) / max(1, area)
+        center_y = sum(float(item["center"][1]) * int(item["area"]) for item in group) / max(1, area)
+        boxes.append(
+            {
+                "source_bbox": [x0, y0, x1, y1],
+                "area": area,
+                "center": [center_x, center_y],
+                "component_labels": labels_in_group,
+                "raw_component_count": len(group),
+            },
+        )
+
+    boxes.sort(key=lambda item: (item["source_bbox"][1], item["source_bbox"][0]))
+    return boxes
+
+
+def affinity_boxes(
+    components: list[dict[str, object]],
+    cluster_gap: int,
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    if not components:
+        return [], {"algorithm": "sklearn.cluster.AffinityPropagation", "labels": []}
+    if len(components) == 1:
+        return boxes_from_labels(components, np.array([0])), {
+            "algorithm": "sklearn.cluster.AffinityPropagation",
+            "labels": [0],
+            "fallback": "single-component",
+        }
+    if len(components) == 2:
+        distance = bbox_distance(components[0]["source_bbox"], components[1]["source_bbox"])
+        labels = np.array([0, 0]) if distance <= max(1, int(cluster_gap)) else np.array([0, 1])
+        return boxes_from_labels(components, labels), {
+            "algorithm": "sklearn.cluster.AffinityPropagation",
+            "labels": labels.astype(int).tolist(),
+            "fallback": "two-component-distance",
+            "distance": float(distance),
+        }
+
+    try:
+        from sklearn.cluster import AffinityPropagation
+    except Exception as exc:  # pragma: no cover - environment error
+        raise RuntimeError("scikit-learn is required for --split-mode auto") from exc
+
+    distances = distance_matrix(components)
+    similarities = -distances
+    model = AffinityPropagation(
+        affinity="precomputed",
+        damping=0.75,
+        max_iter=500,
+        convergence_iter=20,
+        random_state=0,
+    )
+    labels = model.fit_predict(similarities)
+    return boxes_from_labels(components, labels), {
+        "algorithm": "sklearn.cluster.AffinityPropagation",
+        "labels": labels.astype(int).tolist(),
+        "cluster_centers": model.cluster_centers_indices_.astype(int).tolist()
+        if model.cluster_centers_indices_ is not None
+        else [],
+        "distance_matrix": np.round(distances, 3).tolist(),
+    }
+
+
 def split_boxes(
     mask: np.ndarray,
     min_area: int,
@@ -264,12 +354,24 @@ def split_boxes(
     split_mode: str,
     cluster_gap: int,
     cluster_gap_ratio: float,
-) -> tuple[list[dict[str, object]], np.ndarray, list[dict[str, object]]]:
+) -> tuple[list[dict[str, object]], np.ndarray, list[dict[str, object]], dict[str, object]]:
     components, label_image = raw_components(mask, min_area)
     if split_mode == "connected":
         boxes = legacy_connected_boxes(mask, min_area, merge_gap)
-        return attach_component_labels(boxes, components), label_image, components
-    return clustered_boxes(components, merge_gap, cluster_gap, cluster_gap_ratio), label_image, components
+        return attach_component_labels(boxes, components), label_image, components, {
+            "mode": "connected",
+            "effective_cluster_gap": merge_gap,
+        }
+    if split_mode == "auto":
+        boxes, auto_info = affinity_boxes(components, cluster_gap)
+        return boxes, label_image, components, {
+            "mode": "auto",
+            **auto_info,
+        }
+    return clustered_boxes(components, merge_gap, cluster_gap, cluster_gap_ratio), label_image, components, {
+        "mode": "clustered",
+        "effective_cluster_gap": cluster_gap,
+    }
 
 
 def crop_mask_for_box(
@@ -423,7 +525,7 @@ def main() -> None:
 
     image = Image.open(args.input).convert("RGBA")
     mask = load_mask(args.mask, image, args.alpha_threshold)
-    boxes, label_image, raw_items = split_boxes(
+    boxes, label_image, raw_items, split_info = split_boxes(
         mask,
         args.min_area,
         args.merge_gap,
@@ -464,6 +566,7 @@ def main() -> None:
         "input": str(args.input),
         "mask": str(args.mask) if args.mask else "input alpha",
         "split_mode": args.split_mode,
+        "split_info": split_info,
         "padding": max(0, int(args.padding)),
         "min_area": max(1, int(args.min_area)),
         "merge_gap": max(0, int(args.merge_gap)),

@@ -76,7 +76,7 @@ def venv_healthy() -> bool:
         [
             str(py),
             "-c",
-            "import flask, numpy, cv2, PIL, scipy",
+            "import flask, numpy, cv2, PIL, scipy, sklearn",
         ],
         cwd=str(ROOT),
         capture_output=True,
@@ -184,9 +184,9 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--arrange-merge-gap", type=int, default=2, help="Merge nearby mask islands before splitting.")
     run_parser.add_argument(
         "--arrange-split-mode",
-        choices=["clustered", "connected"],
-        default="clustered",
-        help="Use clustered grouping for multi-island elements or legacy connected splitting.",
+        choices=["auto", "clustered", "connected"],
+        default="auto",
+        help="Infer grouping automatically, use explicit clustered grouping, or legacy connected splitting.",
     )
     run_parser.add_argument("--arrange-cluster-gap", type=int, default=18, help="Preferred clustered grouping gap.")
     run_parser.add_argument(

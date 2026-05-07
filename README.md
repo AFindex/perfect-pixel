@@ -91,10 +91,10 @@ python tools/cli.py run input.png
 常用 CLI 示例：
 
 ```powershell
-python tools/cli.py run input.png --arrange-sprites --arrange-columns 4 --arrange-padding 2 --arrange-cluster-gap 18
+python tools/cli.py run input.png --arrange-sprites --arrange-columns 4 --arrange-padding 2
 ```
 
-默认 `--arrange-split-mode clustered` 会先找 mask 小岛，再把距离较近、大小关系像同一素材的组件聚成一个元素。需要旧逻辑时可改用 `--arrange-split-mode connected`。
+默认 `--arrange-split-mode auto` 会先找 mask 小岛，再复用 `scikit-learn` 的 `AffinityPropagation` 根据组件相似度自动决定簇数量。需要手动控制时用 `--arrange-split-mode clustered --arrange-cluster-gap 18`；需要旧逻辑时可改用 `--arrange-split-mode connected`。
 
 ## 当前管线
 

@@ -14,6 +14,7 @@ dependencies = [
   "numpy>=1.24",
   "opencv-python>=4.8",
   "pillow>=10.0",
+  "scikit-learn>=1.2",
   "scipy>=1.10",
 ]
 

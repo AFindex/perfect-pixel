@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Perfect Pixel Workflow</title>
-    <link rel="stylesheet" href="./styles.css?v=20260508-cluster-arrange" />
+    <link rel="stylesheet" href="./styles.css?v=20260508-auto-arrange" />
   </head>
   <body>
     <main class="app-shell">
@@ -196,6 +196,7 @@
               <label class="field">
                 <span>切分算法</span>
                 <select id="arrangeSplitMode">
+                  <option value="auto">auto</option>
                   <option value="clustered">clustered</option>
                   <option value="connected">connected</option>
                 </select>
@@ -358,6 +359,6 @@
     </main>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=20260508-cluster-arrange"></script>
+    <script src="./app.js?v=20260508-auto-arrange"></script>
   </body>
 </html>

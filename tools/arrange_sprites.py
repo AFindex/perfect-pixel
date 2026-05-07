@@ -22,10 +22,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--padding", type=int, default=2, help="Padding inside each normalized cell.")
     parser.add_argument("--min-area", type=int, default=16, help="Ignore mask components smaller than this.")
     parser.add_argument(
+        "--split-mode",
+        choices=["clustered", "connected"],
+        default="clustered",
+        help="clustered groups nearby mask islands into one element; connected keeps the legacy dilation split.",
+    )
+    parser.add_argument(
         "--merge-gap",
         type=int,
         default=2,
-        help="Merge visible islands within this pixel gap before splitting.",
+        help="Legacy connected-mode dilation gap. Also acts as the minimum clustered gap.",
+    )
+    parser.add_argument(
+        "--cluster-gap",
+        type=int,
+        default=18,
+        help="Preferred maximum pixel gap for grouping separate islands into one element.",
+    )
+    parser.add_argument(
+        "--cluster-gap-ratio",
+        type=float,
+        default=0.5,
+        help="Dynamic grouping gap as a fraction of the median component size.",
     )
     parser.add_argument("--cell-width", type=int, default=0, help="Override normalized cell width.")
     parser.add_argument("--cell-height", type=int, default=0, help="Override normalized cell height.")
@@ -50,7 +68,35 @@ def load_mask(mask_path: Path | None, image: Image.Image, threshold: int) -> np.
     return mask_from_image(source, threshold)
 
 
-def component_boxes(mask: np.ndarray, min_area: int, merge_gap: int) -> list[dict[str, object]]:
+def raw_components(mask: np.ndarray, min_area: int) -> tuple[list[dict[str, object]], np.ndarray]:
+    count, labels, stats, centroids = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
+    components: list[dict[str, object]] = []
+    min_area = max(1, int(min_area))
+
+    for label in range(1, count):
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        if area < min_area:
+            continue
+        x = int(stats[label, cv2.CC_STAT_LEFT])
+        y = int(stats[label, cv2.CC_STAT_TOP])
+        w = int(stats[label, cv2.CC_STAT_WIDTH])
+        h = int(stats[label, cv2.CC_STAT_HEIGHT])
+        cx, cy = centroids[label]
+        components.append(
+            {
+                "label": int(label),
+                "source_bbox": [x, y, x + w, y + h],
+                "area": area,
+                "center": [float(cx), float(cy)],
+                "size": float(max(w, h, math.sqrt(area))),
+            },
+        )
+
+    components.sort(key=lambda item: (item["source_bbox"][1], item["source_bbox"][0]))
+    return components, labels
+
+
+def legacy_connected_boxes(mask: np.ndarray, min_area: int, merge_gap: int) -> list[dict[str, object]]:
     detect_mask = mask.astype(np.uint8)
     if merge_gap > 0 and detect_mask.any():
         kernel_size = merge_gap * 2 + 1
@@ -75,6 +121,8 @@ def component_boxes(mask: np.ndarray, min_area: int, merge_gap: int) -> list[dic
                 "source_bbox": [x0, y0, x1, y1],
                 "area": area,
                 "center": [float(xx.mean()), float(yy.mean())],
+                "component_labels": [],
+                "raw_component_count": 1,
             },
         )
 
@@ -82,10 +130,171 @@ def component_boxes(mask: np.ndarray, min_area: int, merge_gap: int) -> list[dic
     return boxes
 
 
-def masked_crop(image: Image.Image, mask: np.ndarray, bbox: list[int]) -> tuple[Image.Image, Image.Image]:
+def bbox_distance(a: list[int], b: list[int]) -> float:
+    ax0, ay0, ax1, ay1 = a
+    bx0, by0, bx1, by1 = b
+    dx = max(ax0 - bx1, bx0 - ax1, 0)
+    dy = max(ay0 - by1, by0 - ay1, 0)
+    return math.hypot(dx, dy)
+
+
+def axis_overlaps(a: list[int], b: list[int]) -> bool:
+    ax0, ay0, ax1, ay1 = a
+    bx0, by0, bx1, by1 = b
+    return min(ax1, bx1) > max(ax0, bx0) or min(ay1, by1) > max(ay0, by0)
+
+
+def bbox_intersects(a: list[int], b: list[int]) -> bool:
+    ax0, ay0, ax1, ay1 = a
+    bx0, by0, bx1, by1 = b
+    return min(ax1, bx1) > max(ax0, bx0) and min(ay1, by1) > max(ay0, by0)
+
+
+def attach_component_labels(
+    boxes: list[dict[str, object]],
+    components: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    for box in boxes:
+        labels = [
+            int(component["label"])
+            for component in components
+            if bbox_intersects(box["source_bbox"], component["source_bbox"])
+        ]
+        box["component_labels"] = labels
+        box["raw_component_count"] = len(labels) or box.get("raw_component_count", 1)
+    return boxes
+
+
+class UnionFind:
+    def __init__(self, count: int) -> None:
+        self.parent = list(range(count))
+
+    def find(self, item: int) -> int:
+        parent = self.parent[item]
+        if parent != item:
+            self.parent[item] = self.find(parent)
+        return self.parent[item]
+
+    def union(self, a: int, b: int) -> None:
+        root_a = self.find(a)
+        root_b = self.find(b)
+        if root_a != root_b:
+            self.parent[root_b] = root_a
+
+
+def clustered_boxes(
+    components: list[dict[str, object]],
+    merge_gap: int,
+    cluster_gap: int,
+    cluster_gap_ratio: float,
+) -> list[dict[str, object]]:
+    if not components:
+        return []
+
+    sizes = np.array([float(item["size"]) for item in components], dtype=np.float32)
+    areas = np.array([int(item["area"]) for item in components], dtype=np.float32)
+    median_size = float(np.median(sizes)) if len(sizes) else 1.0
+    median_area = float(np.median(areas)) if len(areas) else 1.0
+    base_gap = max(float(merge_gap), float(cluster_gap), median_size * max(0.0, cluster_gap_ratio))
+
+    union_find = UnionFind(len(components))
+    satellite_links: dict[int, tuple[float, int]] = {}
+    for i, first in enumerate(components):
+        for j in range(i + 1, len(components)):
+            second = components[j]
+            distance = bbox_distance(first["source_bbox"], second["source_bbox"])
+            gap = base_gap
+            first_area = float(first["area"])
+            second_area = float(second["area"])
+            small_index, large_index = (i, j) if first_area <= second_area else (j, i)
+            small_area = min(first_area, second_area)
+            large_area = max(first_area, second_area)
+
+            if large_area and (small_area / large_area <= 0.22 or small_area <= median_area * 0.45):
+                satellite_gap = base_gap * 1.4
+                if axis_overlaps(first["source_bbox"], second["source_bbox"]):
+                    satellite_gap *= 1.15
+                if distance <= satellite_gap:
+                    current = satellite_links.get(small_index)
+                    if current is None or distance < current[0]:
+                        satellite_links[small_index] = (distance, large_index)
+                continue
+
+            if axis_overlaps(first["source_bbox"], second["source_bbox"]):
+                gap *= 1.15
+
+            if distance <= gap:
+                union_find.union(i, j)
+
+    for small_index, (_, large_index) in satellite_links.items():
+        union_find.union(small_index, large_index)
+
+    groups: dict[int, list[dict[str, object]]] = {}
+    for index, component in enumerate(components):
+        groups.setdefault(union_find.find(index), []).append(component)
+
+    boxes = []
+    for group in groups.values():
+        x0 = min(int(item["source_bbox"][0]) for item in group)
+        y0 = min(int(item["source_bbox"][1]) for item in group)
+        x1 = max(int(item["source_bbox"][2]) for item in group)
+        y1 = max(int(item["source_bbox"][3]) for item in group)
+        area = int(sum(int(item["area"]) for item in group))
+        labels = [int(item["label"]) for item in group]
+        center_x = sum(float(item["center"][0]) * int(item["area"]) for item in group) / max(1, area)
+        center_y = sum(float(item["center"][1]) * int(item["area"]) for item in group) / max(1, area)
+        boxes.append(
+            {
+                "source_bbox": [x0, y0, x1, y1],
+                "area": area,
+                "center": [center_x, center_y],
+                "component_labels": labels,
+                "raw_component_count": len(group),
+            },
+        )
+
+    boxes.sort(key=lambda item: (item["source_bbox"][1], item["source_bbox"][0]))
+    return boxes
+
+
+def split_boxes(
+    mask: np.ndarray,
+    min_area: int,
+    merge_gap: int,
+    split_mode: str,
+    cluster_gap: int,
+    cluster_gap_ratio: float,
+) -> tuple[list[dict[str, object]], np.ndarray, list[dict[str, object]]]:
+    components, label_image = raw_components(mask, min_area)
+    if split_mode == "connected":
+        boxes = legacy_connected_boxes(mask, min_area, merge_gap)
+        return attach_component_labels(boxes, components), label_image, components
+    return clustered_boxes(components, merge_gap, cluster_gap, cluster_gap_ratio), label_image, components
+
+
+def crop_mask_for_box(
+    mask: np.ndarray,
+    label_image: np.ndarray | None,
+    bbox: list[int],
+    component_labels: list[int] | None,
+) -> np.ndarray:
+    x0, y0, x1, y1 = bbox
+    if label_image is not None and component_labels:
+        return np.isin(label_image[y0:y1, x0:x1], component_labels)
+    return mask[y0:y1, x0:x1]
+
+
+def masked_crop(
+    image: Image.Image,
+    mask: np.ndarray,
+    bbox: list[int],
+    label_image: np.ndarray | None = None,
+    component_labels: list[int] | None = None,
+) -> tuple[Image.Image, Image.Image]:
     x0, y0, x1, y1 = bbox
     crop = image.crop((x0, y0, x1, y1)).convert("RGBA")
-    crop_mask = Image.fromarray(np.where(mask[y0:y1, x0:x1], 255, 0).astype(np.uint8), mode="L")
+    crop_bool = crop_mask_for_box(mask, label_image, bbox, component_labels)
+    crop_mask = Image.fromarray(np.where(crop_bool, 255, 0).astype(np.uint8), mode="L")
     alpha = Image.fromarray(
         np.minimum(np.array(crop.getchannel("A")), np.array(crop_mask)).astype(np.uint8),
         mode="L",
@@ -100,6 +309,33 @@ def save_alpha_mask(path: Path, mask: Image.Image) -> None:
     rgba.save(path)
 
 
+def color_for_index(index: int) -> tuple[int, int, int, int]:
+    hue = (index * 0.61803398875) % 1.0
+    segment = int(hue * 6)
+    fraction = hue * 6 - segment
+    q = int(255 * (1 - fraction))
+    t = int(255 * fraction)
+    palette = [
+        (255, t, 0),
+        (q, 255, 0),
+        (0, 255, t),
+        (0, q, 255),
+        (t, 0, 255),
+        (255, 0, q),
+    ]
+    r, g, b = palette[segment % 6]
+    return r, g, b, 190
+
+
+def save_label_debug(path: Path, label_image: np.ndarray, groups: list[list[int]]) -> None:
+    rgba = np.zeros((*label_image.shape, 4), dtype=np.uint8)
+    for index, labels in enumerate(groups):
+        if not labels:
+            continue
+        rgba[np.isin(label_image, labels)] = color_for_index(index)
+    Image.fromarray(rgba, mode="RGBA").save(path)
+
+
 def arrange(
     image: Image.Image,
     mask: np.ndarray,
@@ -108,6 +344,7 @@ def arrange(
     padding: int,
     cell_width: int,
     cell_height: int,
+    label_image: np.ndarray | None = None,
 ) -> tuple[Image.Image, Image.Image, dict[str, object]]:
     padding = max(0, int(padding))
     if not boxes:
@@ -127,7 +364,7 @@ def arrange(
     max_height = 1
     for index, item in enumerate(boxes):
         bbox = item["source_bbox"]
-        crop, crop_mask = masked_crop(image, mask, bbox)
+        crop, crop_mask = masked_crop(image, mask, bbox, label_image, item.get("component_labels"))
         max_width = max(max_width, crop.width)
         max_height = max(max_height, crop.height)
         prepared.append((index, item, crop, crop_mask))
@@ -154,6 +391,8 @@ def arrange(
                 "source_bbox": item["source_bbox"],
                 "target_bbox": [x, y, x + crop.width, y + crop.height],
                 "area": item["area"],
+                "raw_component_count": item.get("raw_component_count", 1),
+                "component_labels": item.get("component_labels", []),
             },
         )
 
@@ -184,7 +423,14 @@ def main() -> None:
 
     image = Image.open(args.input).convert("RGBA")
     mask = load_mask(args.mask, image, args.alpha_threshold)
-    boxes = component_boxes(mask, args.min_area, args.merge_gap)
+    boxes, label_image, raw_items = split_boxes(
+        mask,
+        args.min_area,
+        args.merge_gap,
+        args.split_mode,
+        args.cluster_gap,
+        args.cluster_gap_ratio,
+    )
     sheet, sheet_mask, report = arrange(
         image,
         mask,
@@ -193,11 +439,14 @@ def main() -> None:
         args.padding,
         args.cell_width,
         args.cell_height,
+        label_image,
     )
 
     sprite_path = args.output_dir / "10_arranged_sprite.png"
     mask_path = args.output_dir / "10_arranged_mask.png"
     mask_rgba_path = args.output_dir / "10_arranged_mask_rgba.png"
+    components_debug_path = args.output_dir / "10_components_debug.png"
+    clusters_debug_path = args.output_dir / "10_clusters_debug.png"
     preview_scale = effective_preview_scale(sheet, args.preview_scale, args.max_preview_side)
     preview_path = args.output_dir / f"10_arranged_sprite_x{preview_scale}.png"
     report_path = args.output_dir / "10_arrange_report.json"
@@ -205,6 +454,8 @@ def main() -> None:
     sheet.save(sprite_path)
     sheet_mask.save(mask_path)
     save_alpha_mask(mask_rgba_path, sheet_mask)
+    save_label_debug(components_debug_path, label_image, [[int(item["label"])] for item in raw_items])
+    save_label_debug(clusters_debug_path, label_image, [item.get("component_labels", []) for item in boxes])
     sheet.resize((sheet.width * preview_scale, sheet.height * preview_scale), Image.Resampling.NEAREST).save(
         preview_path,
     )
@@ -212,13 +463,19 @@ def main() -> None:
     payload = {
         "input": str(args.input),
         "mask": str(args.mask) if args.mask else "input alpha",
+        "split_mode": args.split_mode,
         "padding": max(0, int(args.padding)),
         "min_area": max(1, int(args.min_area)),
         "merge_gap": max(0, int(args.merge_gap)),
+        "cluster_gap": max(0, int(args.cluster_gap)),
+        "cluster_gap_ratio": max(0.0, float(args.cluster_gap_ratio)),
+        "raw_component_count": len(raw_items),
         "preview_scale": preview_scale,
         "sprite": str(sprite_path),
         "mask_output": str(mask_path),
         "mask_rgba": str(mask_rgba_path),
+        "components_debug": str(components_debug_path),
+        "clusters_debug": str(clusters_debug_path),
         "preview": str(preview_path),
         **report,
     }

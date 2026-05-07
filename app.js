@@ -81,9 +81,9 @@ const steps = {
     phase: "阶段 08（可选）",
     title: "Mask 切分重排",
     summary:
-      "按最终 sprite 的透明 mask 找连通主体块，把胡乱排列的元素裁切出来并居中放进统一尺寸 cell。适合把 AI 生成的一堆散件整理成可用精灵表。",
-    reuse: "OpenCV connectedComponentsWithStats, Pillow alpha_composite",
-    input: "sprite.png alpha / mask, 列数, cell padding, 合并间距",
+      "按最终 sprite 的透明 mask 找小组件，再用聚类把属于同一素材的断岛合成元素，最后居中放进统一尺寸 cell。",
+    reuse: "OpenCV connectedComponentsWithStats, union-find clustering, Pillow alpha_composite",
+    input: "sprite.png alpha / mask, 切分算法, 聚合距离, 列数, cell padding",
     output: "arranged_sprite.png, arranged_mask_rgba.png, arrange_report.json",
     artifacts: ["10_arranged_sprite.png", "10_arranged_mask_rgba.png", "10_arranged_sprite_x16.png", "10_arrange_report.json"],
   },
@@ -131,6 +131,7 @@ const controls = {
   cleanupJaggy: qs("#cleanupJaggy"),
   useTransparent: qs("#useTransparent"),
   arrangeSprites: qs("#arrangeSprites"),
+  arrangeSplitMode: qs("#arrangeSplitMode"),
   arrangeColumns: qs("#arrangeColumns"),
   arrangePadding: qs("#arrangePadding"),
   arrangeMinArea: qs("#arrangeMinArea"),
@@ -241,6 +242,10 @@ const helpTips = [
     help: "重排后精灵表的列数。0 表示自动接近正方形；指定列数可以匹配引擎里已有的 sprite sheet 读取方式。",
   },
   {
+    selector: "#arrangeSplitMode",
+    help: "clustered 会先找 mask 小岛，再把距离较近、大小关系像同一素材的组件聚成一个元素；connected 是旧逻辑，只按膨胀后的连通区域切分。",
+  },
+  {
     selector: "#arrangePadding",
     help: "每个统一 cell 内部留白像素。值越大，单个元素之间越不容易贴边；过大会让最终精灵表变大。",
   },
@@ -250,7 +255,7 @@ const helpTips = [
   },
   {
     selector: "#arrangeMergeGap",
-    help: "切分前先把距离较近的 mask 岛合并。适合一个角色被发丝、武器、阴影切成几块的情况；过大可能把相邻两个素材合并成一个。",
+    help: "聚合距离。值越大，越倾向把断开的武器、发丝、高光、投影并入同一个元素；过大可能把相邻两个素材合并。",
   },
 ];
 
@@ -529,6 +534,7 @@ function collectParameterSettings() {
     cleanupJaggy: controls.cleanupJaggy.checked,
     useTransparent: controls.useTransparent.checked,
     arrangeSprites: controls.arrangeSprites.checked,
+    arrangeSplitMode: controls.arrangeSplitMode.value,
     arrangeColumns: controls.arrangeColumns.value,
     arrangePadding: controls.arrangePadding.value,
     arrangeMinArea: controls.arrangeMinArea.value,
@@ -558,10 +564,11 @@ function applyParameterSettings(settings) {
   controls.cleanupJaggy.checked = Boolean(settings.cleanupJaggy);
   controls.useTransparent.checked = settings.useTransparent !== false;
   controls.arrangeSprites.checked = Boolean(settings.arrangeSprites);
+  controls.arrangeSplitMode.value = settings.arrangeSplitMode || "clustered";
   controls.arrangeColumns.value = settings.arrangeColumns ?? "0";
   controls.arrangePadding.value = settings.arrangePadding ?? "2";
   controls.arrangeMinArea.value = settings.arrangeMinArea ?? "16";
-  controls.arrangeMergeGap.value = settings.arrangeMergeGap ?? "2";
+  controls.arrangeMergeGap.value = settings.arrangeMergeGap ?? "18";
   renderCommand();
 }
 
@@ -578,7 +585,7 @@ function presetSummary(settings) {
     `edge ${settings.edgeContract}`,
     `outline ${settings.outlineWidth}`,
     settings.processMode === "clean" ? "" : `${settings.method}/${settings.detect}`,
-    settings.arrangeSprites ? `重排 ${settings.arrangeColumns || 0}列` : "",
+    settings.arrangeSprites ? `重排 ${settings.arrangeSplitMode || "clustered"} / ${settings.arrangeColumns || 0}列` : "",
   ]
     .filter(Boolean)
     .join(" · ");
@@ -840,7 +847,7 @@ function buildCommand() {
     lines.push(
       "",
       "# 08 可选：按最终透明 mask 切分组件，统一 cell 大小后重排成精灵表",
-      `python tools/arrange_sprites.py ${quotePath(spriteOutput)} --output-dir ${quotePath(outputDir)} --columns ${controls.arrangeColumns.value} --padding ${controls.arrangePadding.value} --min-area ${controls.arrangeMinArea.value} --merge-gap ${controls.arrangeMergeGap.value} --preview-scale 16 --max-preview-side 4096`,
+      `python tools/arrange_sprites.py ${quotePath(spriteOutput)} --output-dir ${quotePath(outputDir)} --columns ${controls.arrangeColumns.value} --padding ${controls.arrangePadding.value} --min-area ${controls.arrangeMinArea.value} --split-mode ${controls.arrangeSplitMode.value} --merge-gap ${controls.arrangeMergeGap.value} --cluster-gap ${controls.arrangeMergeGap.value} --cluster-gap-ratio 0.5 --preview-scale 16 --max-preview-side 4096`,
     );
   }
 
@@ -863,6 +870,7 @@ function syncModeControls() {
 
   const arrangeDisabled = !controls.arrangeSprites.checked;
   [
+    controls.arrangeSplitMode,
     controls.arrangeColumns,
     controls.arrangePadding,
     controls.arrangeMinArea,
@@ -927,10 +935,13 @@ function appendRunSettings(form) {
   form.append("cleanup", getCleanupOptions().join(","));
   form.append("max_preview_side", "4096");
   form.append("arrange_sprites", controls.arrangeSprites.checked ? "true" : "false");
+  form.append("arrange_split_mode", controls.arrangeSplitMode.value);
   form.append("arrange_columns", controls.arrangeColumns.value);
   form.append("arrange_padding", controls.arrangePadding.value);
   form.append("arrange_min_area", controls.arrangeMinArea.value);
   form.append("arrange_merge_gap", controls.arrangeMergeGap.value);
+  form.append("arrange_cluster_gap", controls.arrangeMergeGap.value);
+  form.append("arrange_cluster_gap_ratio", "0.5");
 }
 
 function setRunStatus(label) {
@@ -955,6 +966,8 @@ function renderResult(data) {
     ["arrangedPreview", "重排预览"],
     ["arrangedMaskRgba", "透明重排 mask"],
     ["arrangedMask", "黑白重排 mask"],
+    ["clustersDebug", "聚类调试图"],
+    ["componentsDebug", "组件调试图"],
     ["clean", "干净抠图 07"],
     ["sprite", state.processMode === "clean" ? "正式源图" : "像素源图"],
     ["preview", "最近邻预览"],
@@ -972,6 +985,7 @@ function renderResult(data) {
     ["arrangedPreview", "重排预览", "统一 cell 后的精灵表"],
     ["arrangedSprite", "重排精灵图", "可直接进入项目的整理版"],
     ["arrangedMaskRgba", "重排 mask", "透明背景，和重排精灵图同布局"],
+    ["clustersDebug", "聚类调试", "同色表示被聚成同一个元素"],
     ["preview", "最近邻预览", "放大检查像素边缘"],
     ["clean", "07 clean", "干净透明源图"],
     ["sprite", state.processMode === "clean" ? "正式源图" : "像素源图", "最终进入项目的 PNG"],
@@ -989,7 +1003,12 @@ function renderResult(data) {
     ["模式", data.processMode === "clean" ? "只清理" : data.processMode],
     ["尺寸", Array.isArray(report.size) ? `${report.size[0]} x ${report.size[1]}` : "-"],
     ["可见色", Number.isFinite(report.visible_color_count) ? String(report.visible_color_count) : "-"],
-    ["切分", Number.isFinite(arrangeReport.component_count) ? `${arrangeReport.component_count} 块` : "-"],
+    [
+      "切分",
+      Number.isFinite(arrangeReport.component_count)
+        ? `${arrangeReport.component_count} 元素 / ${arrangeReport.raw_component_count || arrangeReport.component_count} 组件`
+        : "-",
+    ],
     ["输出", data.outputDir || "-"],
   ].forEach(([label, value]) => {
     const item = document.createElement("div");

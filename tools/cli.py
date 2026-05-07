@@ -182,6 +182,19 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--arrange-padding", type=int, default=2, help="Cell padding for arranged sprites.")
     run_parser.add_argument("--arrange-min-area", type=int, default=16, help="Ignore smaller mask islands.")
     run_parser.add_argument("--arrange-merge-gap", type=int, default=2, help="Merge nearby mask islands before splitting.")
+    run_parser.add_argument(
+        "--arrange-split-mode",
+        choices=["clustered", "connected"],
+        default="clustered",
+        help="Use clustered grouping for multi-island elements or legacy connected splitting.",
+    )
+    run_parser.add_argument("--arrange-cluster-gap", type=int, default=18, help="Preferred clustered grouping gap.")
+    run_parser.add_argument(
+        "--arrange-cluster-gap-ratio",
+        type=float,
+        default=0.5,
+        help="Dynamic clustered gap as a fraction of median component size.",
+    )
     run_parser.add_argument("--json", action="store_true", help="Emit JSON instead of text.")
 
     web_parser = subparsers.add_parser("web", help="Start the local web interface.")
@@ -267,6 +280,9 @@ def handle_run(args: argparse.Namespace) -> int:
             arrange_padding=args.arrange_padding,
             arrange_min_area=args.arrange_min_area,
             arrange_merge_gap=args.arrange_merge_gap,
+            arrange_split_mode=args.arrange_split_mode,
+            arrange_cluster_gap=args.arrange_cluster_gap,
+            arrange_cluster_gap_ratio=args.arrange_cluster_gap_ratio,
         ),
     )
 
@@ -292,6 +308,8 @@ def handle_run(args: argparse.Namespace) -> int:
             "arrangedSprite",
             "arrangedPreview",
             "arrangedMaskRgba",
+            "componentsDebug",
+            "clustersDebug",
             "subjectMaskRgba",
             "outlineMaskRgba",
             "arrangeReport",

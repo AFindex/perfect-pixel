@@ -52,6 +52,13 @@ def int_form(name: str, default: int) -> int:
         return default
 
 
+def float_form(name: str, default: float) -> float:
+    try:
+        return float(request.form.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
 def text_form(name: str, default: str) -> str:
     value = request.form.get(name, default)
     return value.strip() or default
@@ -248,6 +255,9 @@ def run_pipeline():
     arrange_padding = int_form("arrange_padding", 2)
     arrange_min_area = int_form("arrange_min_area", 16)
     arrange_merge_gap = int_form("arrange_merge_gap", 2)
+    arrange_split_mode = text_form("arrange_split_mode", "clustered")
+    arrange_cluster_gap = int_form("arrange_cluster_gap", 18)
+    arrange_cluster_gap_ratio = float_form("arrange_cluster_gap_ratio", 0.5)
 
     unfake_output = output_dir / "08_unfake_pixel_raw.png"
     clean_output = output_dir / "07_clean_rgba.png"
@@ -264,6 +274,8 @@ def run_pipeline():
         output_dir / "10_arranged_sprite_x16.png",
         output_dir / "10_arranged_mask.png",
         output_dir / "10_arranged_mask_rgba.png",
+        output_dir / "10_components_debug.png",
+        output_dir / "10_clusters_debug.png",
         output_dir / "10_arrange_report.json",
     ]
     stale_paths.extend(output_dir.glob("sprite_x*.png"))
@@ -353,8 +365,14 @@ def run_pipeline():
                 str(arrange_padding),
                 "--min-area",
                 str(arrange_min_area),
+                "--split-mode",
+                arrange_split_mode,
                 "--merge-gap",
                 str(arrange_merge_gap),
+                "--cluster-gap",
+                str(arrange_cluster_gap),
+                "--cluster-gap-ratio",
+                str(arrange_cluster_gap_ratio),
                 "--preview-scale",
                 "16",
                 "--max-preview-side",
@@ -404,6 +422,8 @@ def run_pipeline():
         "arrangedPreview": arranged_preview_path,
         "arrangedMask": output_dir / "10_arranged_mask.png",
         "arrangedMaskRgba": output_dir / "10_arranged_mask_rgba.png",
+        "componentsDebug": output_dir / "10_components_debug.png",
+        "clustersDebug": output_dir / "10_clusters_debug.png",
         "arrangeReport": output_dir / "10_arrange_report.json",
         "report": output_dir / "report.json",
     }

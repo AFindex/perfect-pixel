@@ -37,6 +37,9 @@ class PipelineSettings:
     arrange_padding: int = 2
     arrange_min_area: int = 16
     arrange_merge_gap: int = 2
+    arrange_split_mode: str = "clustered"
+    arrange_cluster_gap: int = 18
+    arrange_cluster_gap_ratio: float = 0.5
 
 
 def is_inside(path: Path, root: Path) -> bool:
@@ -151,6 +154,8 @@ def cleanup_stale_outputs(output_dir: Path) -> None:
         output_dir / "10_arranged_sprite_x16.png",
         output_dir / "10_arranged_mask.png",
         output_dir / "10_arranged_mask_rgba.png",
+        output_dir / "10_components_debug.png",
+        output_dir / "10_clusters_debug.png",
         output_dir / "10_arrange_report.json",
     ]
     stale_paths.extend(output_dir.glob("sprite_x*.png"))
@@ -248,8 +253,14 @@ def build_pipeline_commands(
                 str(settings.arrange_padding),
                 "--min-area",
                 str(settings.arrange_min_area),
+                "--split-mode",
+                settings.arrange_split_mode,
                 "--merge-gap",
                 str(settings.arrange_merge_gap),
+                "--cluster-gap",
+                str(settings.arrange_cluster_gap),
+                "--cluster-gap-ratio",
+                str(settings.arrange_cluster_gap_ratio),
                 "--preview-scale",
                 str(settings.preview_scale),
                 "--max-preview-side",
@@ -287,6 +298,8 @@ def artifact_map(
         "arrangedPreview": arranged_preview_path,
         "arrangedMask": output_dir / "10_arranged_mask.png",
         "arrangedMaskRgba": output_dir / "10_arranged_mask_rgba.png",
+        "componentsDebug": output_dir / "10_components_debug.png",
+        "clustersDebug": output_dir / "10_clusters_debug.png",
         "arrangeReport": output_dir / "10_arrange_report.json",
         "report": output_dir / "report.json",
     }

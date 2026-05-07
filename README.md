@@ -84,13 +84,17 @@ python tools/cli.py run input.png
 - `10_arranged_sprite_x16.png`：最近邻放大预览。
 - `10_arranged_mask_rgba.png`：透明背景的同布局 mask，后续做描边或碰撞区域时优先用这个。
 - `10_arranged_mask.png`：黑底白色版同布局 mask，主要用于检查。
+- `10_clusters_debug.png`：聚类调试图，同色表示被判断为同一个元素。
+- `10_components_debug.png`：原始 mask 小组件调试图。
 - `10_arrange_report.json`：每个组件的原 bbox、目标 bbox、cell 尺寸和行列信息。
 
 常用 CLI 示例：
 
 ```powershell
-python tools/cli.py run input.png --arrange-sprites --arrange-columns 4 --arrange-padding 2 --arrange-merge-gap 2
+python tools/cli.py run input.png --arrange-sprites --arrange-columns 4 --arrange-padding 2 --arrange-cluster-gap 18
 ```
+
+默认 `--arrange-split-mode clustered` 会先找 mask 小岛，再把距离较近、大小关系像同一素材的组件聚成一个元素。需要旧逻辑时可改用 `--arrange-split-mode connected`。
 
 ## 当前管线
 

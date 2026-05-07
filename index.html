@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Perfect Pixel Workflow</title>
+    <link rel="stylesheet" href="./styles.css?v=20260507-output-subdir" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Perfect Pixel Pipeline</p>
+          <h1>AI 像素图净化到完美像素图</h1>
+        </div>
+        <div class="topbar-actions" aria-label="全局操作">
+          <button class="primary-button" id="runPipelineButton" type="button">运行管线</button>
+          <button class="ghost-button" id="copyCommandButton" type="button">复制命令</button>
+          <button class="ghost-button" id="exportPlanButton" type="button">导出方案</button>
+        </div>
+      </header>
+
+      <section class="workspace" aria-label="工作流可视化">
+        <aside class="control-panel" aria-label="参数控制">
+          <div class="panel-heading">
+            <span class="panel-kicker">输入</span>
+            <h2>本地编排</h2>
+          </div>
+
+          <div class="drop-zone" id="dropZone" role="button" tabindex="0" aria-label="拖入图片或选择图片">
+            <input id="filePicker" type="file" accept="image/png,image/jpeg,image/webp" hidden />
+            <div class="drop-preview" aria-hidden="true">
+              <img id="dropPreview" alt="" hidden />
+              <span id="dropInitial">PNG</span>
+            </div>
+            <div class="drop-copy">
+              <strong id="dropTitle">拖入图片</strong>
+              <span id="dropMeta">PNG / JPG / WEBP</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field-label-row">
+              <span>输入文件</span>
+              <button
+                class="text-button"
+                id="inputHistoryButton"
+                type="button"
+                aria-expanded="false"
+                aria-controls="inputHistoryPanel"
+              >
+                历史
+              </button>
+            </div>
+            <div class="history-shell">
+              <input id="inputPath" type="text" value="input.png" spellcheck="false" />
+              <div class="history-panel" id="inputHistoryPanel" hidden></div>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field-label-row">
+              <span>输出根目录</span>
+              <button
+                class="text-button"
+                id="outputHistoryButton"
+                type="button"
+                aria-expanded="false"
+                aria-controls="outputHistoryPanel"
+              >
+                历史
+              </button>
+            </div>
+            <div class="history-shell">
+              <div class="inline-field">
+                <input id="outputDir" type="text" value="build/perfect-pixel" spellcheck="false" />
+                <button class="mini-button" id="pickOutputDirButton" type="button">选择</button>
+              </div>
+              <div class="history-panel" id="outputHistoryPanel" hidden></div>
+            </div>
+          </div>
+
+          <div class="field">
+            <span>批次子目录</span>
+            <div class="subdir-field">
+              <input id="outputSubdir" type="text" value="0001" spellcheck="false" aria-label="输出子文件夹索引" />
+              <button class="mini-button icon-button" id="decrementSubdirButton" type="button" aria-label="索引减一">-</button>
+              <button class="mini-button icon-button" id="incrementSubdirButton" type="button" aria-label="索引加一">+</button>
+              <button class="mini-button next-button" id="nextFreeSubdirButton" type="button">下一空号</button>
+            </div>
+            <p class="path-preview" id="effectiveOutputDir">实际输出：build/perfect-pixel/0001</p>
+          </div>
+
+          <div class="field">
+            <span>处理模式</span>
+            <div class="segmented mode-segmented" role="group" aria-label="处理模式">
+              <button class="segment is-active" data-setting="processMode" data-value="clean" type="button">只清理</button>
+              <button class="segment" data-setting="processMode" data-value="safe" type="button">保真 unfake</button>
+              <button class="segment" data-setting="processMode" data-value="pixel" type="button">像素恢复</button>
+            </div>
+          </div>
+
+          <div class="field">
+            <span>背景模式</span>
+            <div class="segmented" role="group" aria-label="背景模式">
+              <button class="segment is-active" data-setting="backgroundMode" data-value="edges" type="button">edges</button>
+              <button class="segment" data-setting="backgroundMode" data-value="corners" type="button">corners</button>
+              <button class="segment" data-setting="backgroundMode" data-value="midpoints" type="button">midpoints</button>
+            </div>
+          </div>
+
+          <label class="range-field">
+            <span>背景容差 <strong id="bgToleranceValue">14</strong></span>
+            <input id="bgTolerance" type="range" min="1" max="32" value="14" />
+          </label>
+
+          <label class="range-field">
+            <span>Alpha 阈值 <strong id="alphaThresholdValue">128</strong></span>
+            <input id="alphaThreshold" type="range" min="1" max="254" value="128" />
+          </label>
+
+          <label class="range-field">
+            <span>白边收缩 <strong id="edgeContractValue">1</strong></span>
+            <input id="edgeContract" type="range" min="0" max="4" value="1" />
+          </label>
+
+          <label class="range-field">
+            <span>描边 mask <strong id="outlineWidthValue">2</strong></span>
+            <input id="outlineWidth" type="range" min="0" max="8" value="2" />
+          </label>
+
+          <div class="field">
+            <span>降采样方法</span>
+            <select id="method">
+              <option value="nearest">nearest</option>
+              <option value="content-adaptive">content-adaptive</option>
+              <option value="dominant">dominant</option>
+              <option value="median">median</option>
+              <option value="mode">mode</option>
+              <option value="mean">mean</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <span>检测方式</span>
+            <select id="detect">
+              <option value="auto">auto</option>
+              <option value="runs">runs</option>
+              <option value="edge">edge</option>
+            </select>
+          </div>
+
+          <label class="check-row">
+            <input id="autoColors" type="checkbox" />
+            <span>自动降色（可能损细节）</span>
+          </label>
+
+          <label class="field" id="colorsField">
+            <span>最大颜色数</span>
+            <input id="colors" type="number" min="2" max="256" value="256" />
+          </label>
+
+          <label class="check-row">
+            <input id="cleanupMorph" type="checkbox" />
+            <span>OpenCV / unfake 形态学清理</span>
+          </label>
+
+          <label class="check-row">
+            <input id="cleanupJaggy" type="checkbox" />
+            <span>jaggy 边缘修正</span>
+          </label>
+
+          <label class="check-row">
+            <input id="useTransparent" type="checkbox" checked />
+            <span>输出透明背景</span>
+          </label>
+        </aside>
+
+        <section class="flow-panel" aria-label="管线图">
+          <div class="flow-header">
+            <div>
+              <p class="panel-kicker">Pipeline</p>
+              <h2>点击阶段查看实现与复用点</h2>
+            </div>
+            <div class="legend" aria-label="图例">
+              <span><i class="dot source"></i> 输入</span>
+              <span><i class="dot mask"></i> mask</span>
+              <span><i class="dot pixel"></i> 像素</span>
+            </div>
+          </div>
+
+          <div class="pipeline-map" id="pipelineMap" role="list" aria-label="工作流阶段">
+            <button class="stage-card is-selected" data-step="ingest" type="button" role="listitem">
+              <span class="stage-index">01</span>
+              <strong>导入与标准化</strong>
+              <small>PNG / RGBA / debug 目录</small>
+            </button>
+            <button class="stage-card" data-step="background" type="button" role="listitem">
+              <span class="stage-index">02</span>
+              <strong>纯色背景识别</strong>
+              <small>边缘连通近白区域</small>
+            </button>
+            <button class="stage-card" data-step="trimap" type="button" role="listitem">
+              <span class="stage-index">03</span>
+              <strong>Mask 与 Trimap</strong>
+              <small>OpenCV morphology</small>
+            </button>
+            <button class="stage-card" data-step="defringe" type="button" role="listitem">
+              <span class="stage-index">04</span>
+              <strong>白边去污染</strong>
+              <small>PyMatting / nearest color</small>
+            </button>
+            <button class="stage-card" data-step="unfake" type="button" role="listitem">
+              <span class="stage-index">05</span>
+              <strong>unfake 像素恢复</strong>
+              <small>grid snap / scale detect</small>
+            </button>
+            <button class="stage-card" data-step="palette" type="button" role="listitem">
+              <span class="stage-index">06</span>
+              <strong>调色板收敛</strong>
+              <small>Pillow / pngquant</small>
+            </button>
+            <button class="stage-card" data-step="qa" type="button" role="listitem">
+              <span class="stage-index">07</span>
+              <strong>导出与 QA</strong>
+              <small>mask / preview / metadata</small>
+            </button>
+          </div>
+        </section>
+
+        <aside class="detail-panel" aria-label="阶段详情">
+          <div class="detail-card">
+            <p class="panel-kicker" id="detailPhase">阶段 01</p>
+            <h2 id="detailTitle">导入与标准化</h2>
+            <p id="detailSummary">统一输入图像格式，建立调试输出目录，为后续 mask、trimap、像素恢复留下可检查中间件。</p>
+
+            <dl class="detail-list">
+              <div>
+                <dt>复用</dt>
+                <dd id="detailReuse">Pillow, pathlib</dd>
+              </div>
+              <div>
+                <dt>输入</dt>
+                <dd id="detailInput">AI 生成 PNG</dd>
+              </div>
+              <div>
+                <dt>输出</dt>
+                <dd id="detailOutput">RGBA 图像, debug 目录</dd>
+              </div>
+            </dl>
+
+            <div class="artifact-strip" id="artifactStrip" aria-label="阶段产物"></div>
+          </div>
+
+          <div class="command-panel">
+            <div class="command-header">
+              <div>
+                <p class="panel-kicker">CLI</p>
+                <h2>当前管线命令</h2>
+              </div>
+              <span class="status-pill">已匹配本机参数</span>
+            </div>
+            <pre id="commandOutput" tabindex="0"></pre>
+          </div>
+
+          <div class="result-panel" id="resultPanel">
+            <div class="command-header">
+              <div>
+                <p class="panel-kicker">Run</p>
+                <h2>执行结果</h2>
+              </div>
+              <span class="status-pill" id="runStatus">等待运行</span>
+            </div>
+            <div class="result-body" id="resultBody">
+              <p class="empty-state">启动本地后端后，拖入图片并点击“运行管线”。</p>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="implementation" aria-label="实现落点">
+        <div>
+          <p class="panel-kicker">Implementation</p>
+          <h2>建议落地为三段式工具</h2>
+        </div>
+        <div class="implementation-grid">
+          <article class="implementation-item">
+            <strong>preclean.py</strong>
+            <span>OpenCV 识别纯色底，生成 mask、trimap、去白边后的 clean PNG。</span>
+          </article>
+          <article class="implementation-item">
+            <strong>unfake</strong>
+            <span>使用你本机已安装 CLI 做 scale detect、grid snap、downscale、cleanup。</span>
+          </article>
+          <article class="implementation-item">
+            <strong>postcheck.py</strong>
+            <span>Pillow 量化、最近邻预览、输出 debug 图和 metadata。</span>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="./app.js?v=20260507-output-subdir"></script>
+  </body>
+</html>

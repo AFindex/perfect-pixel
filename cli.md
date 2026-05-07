@@ -86,6 +86,8 @@ QA 预览默认请求 `--preview-scale 16`，同时用 `--max-preview-side 4096`
 - `10_arranged_sprite_x16.png`
 - `10_arranged_mask_rgba.png`
 - `10_arranged_mask.png`
+- `10_arranged_elements/element_0001.png`
+- `10_arranged_elements/element_0001_mask_rgba.png`
 - `10_clusters_debug.png`
 - `10_components_debug.png`
 - `10_arrange_report.json`

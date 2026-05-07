@@ -82,10 +82,10 @@ const steps = {
     title: "Mask 切分重排",
     summary:
       "按最终 sprite 的透明 mask 找小组件，再用聚类把属于同一素材的断岛合成元素，最后居中放进统一尺寸 cell。",
-    reuse: "OpenCV connectedComponentsWithStats, union-find clustering, Pillow alpha_composite",
+    reuse: "OpenCV connectedComponentsWithStats, scikit-learn AffinityPropagation, Pillow alpha_composite",
     input: "sprite.png alpha / mask, 切分算法, 聚合距离, 列数, cell padding",
-    output: "arranged_sprite.png, arranged_mask_rgba.png, arrange_report.json",
-    artifacts: ["10_arranged_sprite.png", "10_arranged_mask_rgba.png", "10_arranged_sprite_x16.png", "10_arrange_report.json"],
+    output: "arranged_sprite.png, arranged_mask_rgba.png, arranged_elements/, arrange_report.json",
+    artifacts: ["10_arranged_sprite.png", "10_arranged_mask_rgba.png", "10_arranged_elements/", "10_arranged_sprite_x16.png", "10_arrange_report.json"],
   },
 };
 
@@ -965,6 +965,8 @@ function renderResult(data) {
   const artifacts = data.artifacts || {};
   const report = data.report || {};
   const arrangeReport = data.arrangeReport || {};
+  const elementExports = Array.isArray(arrangeReport.element_exports) ? arrangeReport.element_exports : [];
+  const fileUrl = (path) => `${API_BASE}/api/file?path=${encodeURIComponent(path)}`;
   const links = [
     ["arrangedSprite", "重排精灵图"],
     ["arrangedPreview", "重排预览"],
@@ -1058,6 +1060,59 @@ function renderResult(data) {
       visualGrid.append(card);
     });
     body.append(visualGrid);
+  }
+
+  if (elementExports.length) {
+    const elementSection = document.createElement("section");
+    elementSection.className = "element-export-section";
+
+    const heading = document.createElement("div");
+    heading.className = "element-export-heading";
+    const title = document.createElement("strong");
+    title.textContent = "聚类单件";
+    const detail = document.createElement("span");
+    detail.textContent = `${elementExports.length} 个元素，已保存到 10_arranged_elements`;
+    heading.append(title, detail);
+
+    const grid = document.createElement("div");
+    grid.className = "element-export-grid";
+    elementExports.forEach((entry, index) => {
+      if (!entry.sprite || !entry.mask_rgba) return;
+      const spriteUrl = fileUrl(entry.sprite);
+      const maskUrl = fileUrl(entry.mask_rgba);
+      const card = document.createElement("article");
+      card.className = "element-export-card";
+
+      const thumbLink = document.createElement("a");
+      thumbLink.className = "element-export-thumb";
+      thumbLink.href = spriteUrl;
+      thumbLink.target = "_blank";
+      thumbLink.rel = "noreferrer";
+      const img = document.createElement("img");
+      img.src = spriteUrl;
+      img.alt = `元素 ${String(index + 1).padStart(4, "0")}`;
+      img.loading = "lazy";
+      thumbLink.append(img);
+
+      const meta = document.createElement("div");
+      meta.className = "element-export-meta";
+      const name = document.createElement("strong");
+      name.textContent = `元素 ${String(index + 1).padStart(4, "0")}`;
+      const count = document.createElement("span");
+      count.textContent = `${entry.raw_component_count || 1} 个原始组件`;
+      const mask = document.createElement("a");
+      mask.href = maskUrl;
+      mask.target = "_blank";
+      mask.rel = "noreferrer";
+      mask.textContent = "打开透明 mask";
+      meta.append(name, count, mask);
+
+      card.append(thumbLink, meta);
+      grid.append(card);
+    });
+
+    elementSection.append(heading, grid);
+    body.append(elementSection);
   }
 
   const linkBox = document.createElement("div");

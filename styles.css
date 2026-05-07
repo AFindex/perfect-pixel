@@ -1135,6 +1135,108 @@ pre {
   font-weight: 620;
 }
 
+.element-export-section {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.element-export-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.element-export-heading strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.element-export-heading span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 640;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.element-export-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  max-height: 360px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.element-export-card {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  background: #fff;
+}
+
+.element-export-thumb {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background:
+    linear-gradient(45deg, #edf0ec 25%, transparent 25%),
+    linear-gradient(-45deg, #edf0ec 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #edf0ec 75%),
+    linear-gradient(-45deg, transparent 75%, #edf0ec 75%);
+  background-color: #fff;
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
+  background-size: 16px 16px;
+}
+
+.element-export-thumb img {
+  max-width: 100%;
+  max-height: 100%;
+  image-rendering: pixelated;
+}
+
+.element-export-meta {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.element-export-meta strong,
+.element-export-meta span,
+.element-export-meta a {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.element-export-meta strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.element-export-meta span,
+.element-export-meta a {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 660;
+}
+
 .result-links {
   display: grid;
   gap: 8px;
@@ -1236,6 +1338,10 @@ pre {
     grid-column: 1 / -1;
     grid-template-columns: 1fr 1fr;
   }
+
+  .element-export-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 820px) {
@@ -1284,7 +1390,13 @@ pre {
 
   .run-summary,
   .visual-grid,
+  .element-export-grid,
   .arrange-options {
     grid-template-columns: 1fr;
+  }
+
+  .element-export-heading {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

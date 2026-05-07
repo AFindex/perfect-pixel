@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -283,6 +284,9 @@ def run_pipeline():
     for stale in stale_paths:
         if stale.exists() and stale.is_file():
             stale.unlink()
+    elements_dir = output_dir / "10_arranged_elements"
+    if elements_dir.exists() and elements_dir.is_dir():
+        shutil.rmtree(elements_dir)
 
     commands = [
         [

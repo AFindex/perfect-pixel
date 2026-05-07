@@ -84,9 +84,11 @@ python tools/cli.py run input.png
 - `10_arranged_sprite_x16.png`：最近邻放大预览。
 - `10_arranged_mask_rgba.png`：透明背景的同布局 mask，后续做描边或碰撞区域时优先用这个。
 - `10_arranged_mask.png`：黑底白色版同布局 mask，主要用于检查。
+- `10_arranged_elements/element_0001.png`：聚类后的单个大元素裁切图，每个元素单独保存。
+- `10_arranged_elements/element_0001_mask_rgba.png`：对应单件的透明背景 mask，用于单件描边、碰撞或后续批处理。
 - `10_clusters_debug.png`：聚类调试图，同色表示被判断为同一个元素。
 - `10_components_debug.png`：原始 mask 小组件调试图。
-- `10_arrange_report.json`：每个组件的原 bbox、目标 bbox、cell 尺寸和行列信息。
+- `10_arrange_report.json`：每个组件的原 bbox、目标 bbox、cell 尺寸、行列信息和单件导出路径。
 
 常用 CLI 示例：
 
@@ -105,7 +107,7 @@ python tools/cli.py run input.png --arrange-sprites --arrange-columns 4 --arrang
 5. unfake 像素恢复：复用本机 `unfake` CLI。
 6. 调色板收敛：Pillow quantize 或 pngquant。
 7. 导出与 QA：true-res PNG、最近邻预览、debug 图、metadata。
-8. 可选 Mask 切分重排：OpenCV 连通组件切分，Pillow 统一 cell 排列，导出整理版 sprite 和 mask。
+8. 可选 Mask 切分重排：OpenCV 连通组件切分，scikit-learn 自动聚类，Pillow 统一 cell 排列，导出整理版 sprite、mask 和聚类单件。
 
 ## 可跑的最小命令链
 

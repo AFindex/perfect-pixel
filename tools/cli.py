@@ -318,6 +318,10 @@ def handle_run(args: argparse.Namespace) -> int:
             item = artifacts.get(key)
             if item:
                 print(f"  - {key}: {item['displayPath']}")
+        arrange_report = result.get("arrangeReport") or {}
+        elements_dir = arrange_report.get("elements_dir")
+        if elements_dir:
+            print(f"  - arrangedElements: {elements_dir}")
     return 0
 
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import shutil
 from pathlib import Path
 
 import cv2
@@ -411,6 +412,40 @@ def save_alpha_mask(path: Path, mask: Image.Image) -> None:
     rgba.save(path)
 
 
+def export_clustered_elements(
+    image: Image.Image,
+    mask: np.ndarray,
+    boxes: list[dict[str, object]],
+    label_image: np.ndarray | None,
+    output_dir: Path,
+) -> tuple[Path, list[dict[str, object]]]:
+    elements_dir = output_dir / "10_arranged_elements"
+    if elements_dir.exists():
+        shutil.rmtree(elements_dir)
+    elements_dir.mkdir(parents=True, exist_ok=True)
+
+    exports: list[dict[str, object]] = []
+    for index, item in enumerate(boxes, start=1):
+        bbox = item["source_bbox"]
+        crop, crop_mask = masked_crop(image, mask, bbox, label_image, item.get("component_labels"))
+        sprite_path = elements_dir / f"element_{index:04d}.png"
+        mask_rgba_path = elements_dir / f"element_{index:04d}_mask_rgba.png"
+        crop.save(sprite_path)
+        save_alpha_mask(mask_rgba_path, crop_mask)
+        exports.append(
+            {
+                "index": index - 1,
+                "sprite": str(sprite_path),
+                "mask_rgba": str(mask_rgba_path),
+                "source_bbox": bbox,
+                "area": item["area"],
+                "raw_component_count": item.get("raw_component_count", 1),
+                "component_labels": item.get("component_labels", []),
+            },
+        )
+    return elements_dir, exports
+
+
 def color_for_index(index: int) -> tuple[int, int, int, int]:
     hue = (index * 0.61803398875) % 1.0
     segment = int(hue * 6)
@@ -543,6 +578,7 @@ def main() -> None:
         args.cell_height,
         label_image,
     )
+    elements_dir, element_exports = export_clustered_elements(image, mask, boxes, label_image, args.output_dir)
 
     sprite_path = args.output_dir / "10_arranged_sprite.png"
     mask_path = args.output_dir / "10_arranged_mask.png"
@@ -577,6 +613,8 @@ def main() -> None:
         "sprite": str(sprite_path),
         "mask_output": str(mask_path),
         "mask_rgba": str(mask_rgba_path),
+        "elements_dir": str(elements_dir),
+        "element_exports": element_exports,
         "components_debug": str(components_debug_path),
         "clusters_debug": str(clusters_debug_path),
         "preview": str(preview_path),

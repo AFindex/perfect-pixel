@@ -104,6 +104,10 @@ const controls = {
   incrementSubdirButton: qs("#incrementSubdirButton"),
   nextFreeSubdirButton: qs("#nextFreeSubdirButton"),
   effectiveOutputDir: qs("#effectiveOutputDir"),
+  presetName: qs("#presetName"),
+  presetList: qs("#presetList"),
+  savePresetButton: qs("#savePresetButton"),
+  clearPresetsButton: qs("#clearPresetsButton"),
   bgTolerance: qs("#bgTolerance"),
   alphaThreshold: qs("#alphaThreshold"),
   edgeContract: qs("#edgeContract"),
@@ -124,6 +128,8 @@ const API_BASE = window.location.protocol.startsWith("http")
 
 const HISTORY_LIMIT = 12;
 const SUBDIR_STORAGE_KEY = "perfectPixel.outputSubdir";
+const PRESET_STORAGE_KEY = "perfectPixel.parameterPresets";
+const PRESET_LIMIT = 20;
 const historyConfig = {
   input: {
     key: "perfectPixel.inputHistory",
@@ -140,6 +146,69 @@ const historyConfig = {
     target: () => controls.outputDir,
   },
 };
+
+const helpTips = [
+  {
+    selector: "#outputDir",
+    help: "只表示输出根目录。真正的产物会写入它下面的批次子目录，避免多次运行互相覆盖。",
+  },
+  {
+    selector: "#outputSubdir",
+    help: "每次运行的批次文件夹名，例如 1234。加减按钮只更新数字部分，下一空号会跳过已经存在的目录。",
+  },
+  {
+    selector: "#processModeField",
+    help: "只清理会保留 07_clean_rgba 作为正式结果；保真 unfake 会禁止缩放和网格吸附；像素恢复会让 unfake 尝试识别像素网格，可能更像像素图但也更容易改变细节。",
+  },
+  {
+    selector: "#backgroundModeField",
+    help: "决定从哪里取背景种子。edges 用整圈边缘，适合白底/纯色底；corners 更保守；midpoints 适合角落被主体占住但边中仍是背景的图。",
+  },
+  {
+    selector: "#bgTolerance",
+    help: "背景颜色容差。值越大，越多接近背景色的噪点会被抠除；过大可能把主体里的白色高光、浅色边缘也当背景删掉。",
+  },
+  {
+    selector: "#alphaThreshold",
+    help: "判断像素是否可见的 alpha 阈值。高一点会丢掉半透明脏边，低一点会保留更多边缘，但也可能留下灰白毛边。",
+  },
+  {
+    selector: "#edgeContract",
+    help: "对白边处理时把可靠前景向内收缩的像素数。值越大越强力去白边，但过大可能让角色/物体边缘变瘦或缺口变多。",
+  },
+  {
+    selector: "#outlineWidth",
+    help: "透明描边 mask 的外扩宽度。只影响 06_outline_mask_rgba 等 mask 输出，不会改变 sprite 本体；值越大后续描边越厚。",
+  },
+  {
+    selector: "#method",
+    help: "对应 unfake 的 method：从模糊/放大的区域回落到像素格时如何取色。nearest 最保守；dominant/mode 更像选主色；median/mean 更平滑但可能糊；content-adaptive 会更主动猜内容。",
+  },
+  {
+    selector: "#detect",
+    help: "对应 unfake 的像素 scale 检测方式。auto 自动选择；runs 看连续色块规律；edge 看边缘周期。检测错会导致网格错位、尺寸变化或细节被采样坏。",
+  },
+  {
+    selector: "#autoColors",
+    help: "让 unfake 自动决定降色。可能让颜色更像传统像素图，但也容易损失 AI 图里的微妙色阶；需要保真时建议关闭。",
+  },
+  {
+    selector: "#colors",
+    help: "限制最大可见颜色数。数值越低越像低色数像素图，文件也更规整；过低会断渐变、丢阴影和小色块。",
+  },
+  {
+    selector: "#cleanupMorph",
+    help: "开启形态学清理，倾向于修掉孤立噪点和小洞。适合脏白底；过强可能吃掉细小装饰、发丝或尖角。",
+  },
+  {
+    selector: "#cleanupJaggy",
+    help: "开启 jaggy 边缘修正，尝试整理锯齿边。可能让边缘更干净，也可能改变本来就需要保留的像素阶梯。",
+  },
+  {
+    selector: "#useTransparent",
+    help: "让 unfake 输出透明背景。关闭后可能保留背景色，适合某些需要实底贴图的流程；做 sprite 或抠图通常保持开启。",
+  },
+];
 
 function formatBytes(bytes) {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 KB";
@@ -278,6 +347,40 @@ function toggleHistoryPanel(kind) {
   config.button().setAttribute("aria-expanded", "true");
 }
 
+function fieldLabelFor(target) {
+  const wrapper = target.closest(".field, .range-field, .check-row, .preset-panel");
+  if (!wrapper) return null;
+  const labelRow = wrapper.querySelector(".field-label-row");
+  if (labelRow) return labelRow.querySelector("span");
+  return Array.from(wrapper.children).find((child) => child.tagName === "SPAN") || null;
+}
+
+function createHelpButton(help) {
+  const button = document.createElement("button");
+  button.className = "help-button";
+  button.type = "button";
+  button.textContent = "?";
+  button.dataset.help = help;
+  button.setAttribute("aria-label", help);
+  ["click", "mousedown"].forEach((eventName) => {
+    button.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+  });
+  return button;
+}
+
+function attachHelpTips() {
+  helpTips.forEach(({ selector, help }) => {
+    const target = qs(selector);
+    if (!target) return;
+    const label = fieldLabelFor(target);
+    if (!label || label.querySelector(".help-button")) return;
+    label.append(createHelpButton(help));
+  });
+}
+
 function sanitizeSubdir(value) {
   const cleaned = String(value || "")
     .trim()
@@ -347,6 +450,151 @@ function restoreOutputSubdir() {
   } catch {
     // Ignore storage failures in embedded browsers.
   }
+}
+
+function readPresets() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PRESET_STORAGE_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed.filter((preset) => preset && preset.settings) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePresets(presets) {
+  try {
+    localStorage.setItem(PRESET_STORAGE_KEY, JSON.stringify(presets.slice(0, PRESET_LIMIT)));
+  } catch {
+    showToast("预设保存失败");
+  }
+}
+
+function collectParameterSettings() {
+  return {
+    processMode: state.processMode,
+    backgroundMode: state.backgroundMode,
+    bgTolerance: controls.bgTolerance.value,
+    alphaThreshold: controls.alphaThreshold.value,
+    edgeContract: controls.edgeContract.value,
+    outlineWidth: controls.outlineWidth.value,
+    method: controls.method.value,
+    detect: controls.detect.value,
+    autoColors: controls.autoColors.checked,
+    colors: controls.colors.value,
+    cleanupMorph: controls.cleanupMorph.checked,
+    cleanupJaggy: controls.cleanupJaggy.checked,
+    useTransparent: controls.useTransparent.checked,
+  };
+}
+
+function setSegmentValue(setting, value) {
+  state[setting] = value;
+  qsa(`[data-setting="${setting}"]`).forEach((item) => {
+    item.classList.toggle("is-active", item.dataset.value === value);
+  });
+}
+
+function applyParameterSettings(settings) {
+  setSegmentValue("processMode", settings.processMode || "clean");
+  setSegmentValue("backgroundMode", settings.backgroundMode || "edges");
+  controls.bgTolerance.value = settings.bgTolerance ?? "14";
+  controls.alphaThreshold.value = settings.alphaThreshold ?? "128";
+  controls.edgeContract.value = settings.edgeContract ?? "1";
+  controls.outlineWidth.value = settings.outlineWidth ?? "2";
+  controls.method.value = settings.method || "nearest";
+  controls.detect.value = settings.detect || "auto";
+  controls.autoColors.checked = Boolean(settings.autoColors);
+  controls.colors.value = settings.colors ?? "256";
+  controls.cleanupMorph.checked = Boolean(settings.cleanupMorph);
+  controls.cleanupJaggy.checked = Boolean(settings.cleanupJaggy);
+  controls.useTransparent.checked = settings.useTransparent !== false;
+  renderCommand();
+}
+
+function presetSummary(settings) {
+  const modeLabel = {
+    clean: "只清理",
+    safe: "保真 unfake",
+    pixel: "像素恢复",
+  }[settings.processMode] || settings.processMode;
+  return [
+    modeLabel,
+    `bg ${settings.bgTolerance}`,
+    `alpha ${settings.alphaThreshold}`,
+    `edge ${settings.edgeContract}`,
+    `outline ${settings.outlineWidth}`,
+    settings.processMode === "clean" ? "" : `${settings.method}/${settings.detect}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function renderPresetList() {
+  const presets = readPresets();
+  const fragment = document.createDocumentFragment();
+
+  if (!presets.length) {
+    const empty = document.createElement("p");
+    empty.className = "preset-empty";
+    empty.textContent = "还没有保存过参数预设";
+    fragment.append(empty);
+    controls.presetList.replaceChildren(fragment);
+    return;
+  }
+
+  presets.forEach((preset) => {
+    const item = document.createElement("div");
+    item.className = "preset-item";
+
+    const meta = document.createElement("div");
+    meta.className = "preset-meta";
+    const name = document.createElement("strong");
+    name.textContent = preset.name || "未命名预设";
+    const detail = document.createElement("span");
+    detail.textContent = presetSummary(preset.settings);
+    detail.title = detail.textContent;
+    meta.append(name, detail);
+
+    const load = document.createElement("button");
+    load.className = "mini-button";
+    load.type = "button";
+    load.textContent = "读取";
+    load.addEventListener("click", () => {
+      applyParameterSettings(preset.settings);
+      showToast(`已读取预设：${preset.name || "未命名预设"}`);
+    });
+
+    item.append(meta, load);
+    fragment.append(item);
+  });
+
+  controls.presetList.replaceChildren(fragment);
+}
+
+function saveCurrentPreset() {
+  const timestamp = new Date();
+  const fallbackName = `预设 ${timestamp.toLocaleString("zh-CN", { hour12: false })}`;
+  const name = controls.presetName.value.trim() || fallbackName;
+  const preset = {
+    id: `${timestamp.getTime()}-${Math.random().toString(16).slice(2)}`,
+    name,
+    savedAt: timestamp.toISOString(),
+    settings: collectParameterSettings(),
+  };
+  const next = [
+    preset,
+    ...readPresets().filter((item) => (item.name || "").toLowerCase() !== name.toLowerCase()),
+  ];
+  writePresets(next);
+  controls.presetName.value = "";
+  renderPresetList();
+  showToast("参数预设已保存");
+}
+
+function clearPresets() {
+  writePresets([]);
+  renderPresetList();
+  showToast("参数预设已清空");
 }
 
 function quotePath(value) {
@@ -841,10 +1089,7 @@ function bindEvents() {
   qsa(".segment").forEach((segment) => {
     segment.addEventListener("click", () => {
       const { setting, value } = segment.dataset;
-      state[setting] = value;
-      qsa(`[data-setting="${setting}"]`).forEach((item) => {
-        item.classList.toggle("is-active", item === segment);
-      });
+      setSegmentValue(setting, value);
       renderCommand();
     });
   });
@@ -864,6 +1109,14 @@ function bindEvents() {
   controls.decrementSubdirButton.addEventListener("click", () => stepOutputSubdir(-1));
   controls.incrementSubdirButton.addEventListener("click", () => stepOutputSubdir(1));
   controls.nextFreeSubdirButton.addEventListener("click", pickNextFreeSubdir);
+  controls.savePresetButton.addEventListener("click", saveCurrentPreset);
+  controls.clearPresetsButton.addEventListener("click", clearPresets);
+  controls.presetName.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      saveCurrentPreset();
+    }
+  });
 
   qs("#copyCommandButton").addEventListener("click", async () => {
     try {
@@ -880,8 +1133,10 @@ function bindEvents() {
 }
 
 bindEvents();
+attachHelpTips();
 restoreOutputSubdir();
 renderHistoryPanel("input");
 renderHistoryPanel("output");
+renderPresetList();
 selectStep("ingest");
 renderCommand();

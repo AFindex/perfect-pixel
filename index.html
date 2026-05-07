@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Perfect Pixel Workflow</title>
-    <link rel="stylesheet" href="./styles.css?v=20260507-output-subdir" />
+    <link rel="stylesheet" href="./styles.css?v=20260507-presets-help" />
   </head>
   <body>
     <main class="app-shell">
@@ -91,7 +91,19 @@
             <p class="path-preview" id="effectiveOutputDir">实际输出：build/perfect-pixel/0001</p>
           </div>
 
-          <div class="field">
+          <div class="preset-panel" aria-label="参数预设">
+            <div class="field-label-row">
+              <span>参数预设</span>
+              <button class="text-button" id="clearPresetsButton" type="button">清空</button>
+            </div>
+            <div class="preset-save-row">
+              <input id="presetName" type="text" placeholder="预设名，例如 白底精修" spellcheck="false" />
+              <button class="mini-button" id="savePresetButton" type="button">保存</button>
+            </div>
+            <div class="preset-list" id="presetList" aria-live="polite"></div>
+          </div>
+
+          <div class="field" id="processModeField">
             <span>处理模式</span>
             <div class="segmented mode-segmented" role="group" aria-label="处理模式">
               <button class="segment is-active" data-setting="processMode" data-value="clean" type="button">只清理</button>
@@ -100,7 +112,7 @@
             </div>
           </div>
 
-          <div class="field">
+          <div class="field" id="backgroundModeField">
             <span>背景模式</span>
             <div class="segmented" role="group" aria-label="背景模式">
               <button class="segment is-active" data-setting="backgroundMode" data-value="edges" type="button">edges</button>
@@ -301,6 +313,6 @@
     </main>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=20260507-output-subdir"></script>
+    <script src="./app.js?v=20260507-presets-help"></script>
   </body>
 </html>

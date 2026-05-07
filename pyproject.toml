@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "perfect-pixel"
+version = "0.2.0"
+description = "CLI and web workflow for perfect pixel cleanup"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "AFindex" }]
+dependencies = [
+  "flask>=3.0",
+  "numpy>=1.24",
+  "opencv-python>=4.8",
+  "pillow>=10.0",
+  "scipy>=1.10",
+]
+
+[project.scripts]
+perfect-pixel = "tools.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["tools*"]

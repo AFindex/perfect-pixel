@@ -2,6 +2,8 @@
 
 一个离线可打开的 Web 原型，用来可视化 AI 像素图到完美像素图的工作流。
 
+CLI 参考见 [cli.md](./cli.md)。
+
 ## 打开
 
 直接用浏览器打开：
@@ -12,10 +14,15 @@ D:\Godot\projs\perfect_pixel\index.html
 
 输入区支持拖入图片或点击选择图片。静态 `file://` 页面只能读取文件名和预览图，浏览器不会暴露完整磁盘路径，也不能直接执行 `python` 或 `unfake`。
 
-要启用“运行管线”，启动本地后端：
+要启用“运行管线”，先初始化环境：
 
 ```powershell
-python -m pip install -r requirements.txt
+python tools/cli.py init
+```
+
+然后启动本地后端：
+
+```powershell
 python tools/server.py --host 127.0.0.1 --port 8765
 ```
 
@@ -26,6 +33,28 @@ http://127.0.0.1:8765/
 ```
 
 如果你继续使用 `file://` 页面，只要后端在 `127.0.0.1:8765` 运行，按钮也会通过本地接口执行。
+
+## CLI
+
+先初始化环境：
+
+```powershell
+python tools/cli.py init
+```
+
+之后可以直接用命令行跑整条管线：
+
+```powershell
+.\.venv\Scripts\perfect-pixel.exe run input.png -o build/perfect-pixel --subdir 1234
+.\.venv\Scripts\perfect-pixel.exe web --host 127.0.0.1 --port 8765
+.\.venv\Scripts\perfect-pixel.exe doctor
+```
+
+如果不想依赖全局命令，也可以继续直接：
+
+```powershell
+python tools/cli.py run input.png
+```
 
 ## 处理模式
 

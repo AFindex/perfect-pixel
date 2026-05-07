@@ -28,3 +28,5 @@ flowchart LR
 | Pixel restore | unfake CLI | Scale detection, grid snap, dominant/content-adaptive downscale |
 | Palette converge | Pillow / pngquant | Reduce colors without dithering |
 | QA export | Pillow / JSON | Nearest-neighbor preview and metadata |
+
+This same pipeline powers both `perfect-pixel run` and `perfect-pixel web`.

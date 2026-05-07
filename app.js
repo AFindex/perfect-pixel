@@ -82,7 +82,7 @@ const steps = {
     title: "Mask 切分重排",
     summary:
       "按最终 sprite 的透明 mask 找小组件，再用聚类把属于同一素材的断岛合成元素，最后居中放进统一尺寸 cell。",
-    reuse: "OpenCV connectedComponentsWithStats, scikit-learn AffinityPropagation, Pillow alpha_composite",
+    reuse: "OpenCV morphology + connectedComponentsWithStats, scikit-learn clusterers, Pillow alpha_composite",
     input: "sprite.png alpha / mask, 切分算法, 聚合距离, 列数, cell padding",
     output: "arranged_sprite.png, arranged_mask_rgba.png, arranged_elements/, arrange_report.json",
     artifacts: ["10_arranged_sprite.png", "10_arranged_mask_rgba.png", "10_arranged_elements/", "10_arranged_sprite_x16.png", "10_arrange_report.json"],
@@ -243,7 +243,7 @@ const helpTips = [
   },
   {
     selector: "#arrangeSplitMode",
-    help: "auto 复用 scikit-learn AffinityPropagation，从组件相似度矩阵自动决定簇数量；clustered 是手动距离聚合；connected 是旧逻辑。",
+    help: "auto 默认用 OpenCV 形态学合并再做连通组件，通常最适合 sprite 图里的装饰、箭头、震动线；agglomerative/hdbscan/affinity 是可对照的 sklearn 聚类算法；clustered/connected 是回退逻辑。",
   },
   {
     selector: "#arrangePadding",
@@ -568,7 +568,7 @@ function applyParameterSettings(settings) {
   controls.arrangeColumns.value = settings.arrangeColumns ?? "0";
   controls.arrangePadding.value = settings.arrangePadding ?? "2";
   controls.arrangeMinArea.value = settings.arrangeMinArea ?? "16";
-  controls.arrangeMergeGap.value = settings.arrangeMergeGap ?? "18";
+  controls.arrangeMergeGap.value = settings.arrangeMergeGap ?? "14";
   renderCommand();
 }
 

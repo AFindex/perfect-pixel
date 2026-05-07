@@ -257,7 +257,7 @@ def run_pipeline():
     arrange_min_area = int_form("arrange_min_area", 16)
     arrange_merge_gap = int_form("arrange_merge_gap", 2)
     arrange_split_mode = text_form("arrange_split_mode", "auto")
-    arrange_cluster_gap = int_form("arrange_cluster_gap", 18)
+    arrange_cluster_gap = int_form("arrange_cluster_gap", 14)
     arrange_cluster_gap_ratio = float_form("arrange_cluster_gap_ratio", 0.5)
 
     unfake_output = output_dir / "08_unfake_pixel_raw.png"

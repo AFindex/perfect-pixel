@@ -13,6 +13,24 @@ python tools/cli.py init
 1. 创建 `.venv`
 2. 安装 Python 依赖和本项目的可编辑安装
 
+RMBG-2.0 是可选推理环境，单独安装：
+
+```powershell
+python tools/cli.py init --with-rmbg
+```
+
+需要下载并加载一次模型时：
+
+```powershell
+python tools/cli.py init --with-rmbg --rmbg-warmup
+```
+
+也可以直接检查独立包装器：
+
+```powershell
+python tools/rmbg2.py doctor --json
+```
+
 初始化后，你可以直接用：
 
 ```powershell
@@ -60,7 +78,7 @@ python tools/cli.py run input.png
 - `--arrange-columns`
 - `--arrange-padding`
 - `--arrange-min-area`
-- `--arrange-split-mode auto|clustered|connected`
+- `--arrange-split-mode auto|agglomerative|hdbscan|affinity|clustered|connected`
 - `--arrange-cluster-gap`
 - `--arrange-cluster-gap-ratio`
 - `--arrange-merge-gap`
@@ -92,7 +110,7 @@ QA 预览默认请求 `--preview-scale 16`，同时用 `--max-preview-side 4096`
 - `10_components_debug.png`
 - `10_arrange_report.json`
 
-默认 `auto` 会复用 `scikit-learn` 的 `AffinityPropagation`，根据组件相似度自动决定簇数量，再把同一个元素里断开的武器、发丝、高光、投影聚合到一起。需要手动距离时用 `--arrange-split-mode clustered --arrange-cluster-gap 18`，旧版按膨胀连通域切分的行为可用 `--arrange-split-mode connected` 回退。
+默认 `auto` 会用 OpenCV 形态学合并再做连通组件，通常更适合 sprite 图里断开的武器、发丝、高光、投影、震动线。需要对照聚类算法时可试 `agglomerative`、`hdbscan` 或旧的 `affinity`；需要手动距离时用 `--arrange-split-mode clustered --arrange-cluster-gap 14`，旧版按膨胀连通域切分的行为可用 `--arrange-split-mode connected` 回退。
 
 ### `web`
 

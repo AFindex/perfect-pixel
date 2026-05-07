@@ -24,9 +24,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-area", type=int, default=16, help="Ignore mask components smaller than this.")
     parser.add_argument(
         "--split-mode",
-        choices=["auto", "clustered", "connected"],
+        choices=["auto", "agglomerative", "hdbscan", "affinity", "clustered", "connected"],
         default="auto",
-        help="auto uses scikit-learn AffinityPropagation; clustered uses explicit gaps; connected keeps legacy dilation splitting.",
+        help="auto uses OpenCV morphology grouping for sprite-like sheets; agglomerative/hdbscan/affinity expose sklearn clusterers; clustered/connected are fallbacks.",
     )
     parser.add_argument(
         "--merge-gap",
@@ -37,7 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cluster-gap",
         type=int,
-        default=18,
+        default=14,
         help="Preferred maximum pixel gap for grouping separate islands into one element.",
     )
     parser.add_argument(
@@ -143,6 +143,11 @@ def axis_overlaps(a: list[int], b: list[int]) -> bool:
     ax0, ay0, ax1, ay1 = a
     bx0, by0, bx1, by1 = b
     return min(ax1, bx1) > max(ax0, bx0) or min(ay1, by1) > max(ay0, by0)
+
+
+def range_overlap_ratio(a0: int, a1: int, b0: int, b1: int) -> float:
+    overlap = max(0, min(a1, b1) - max(a0, b0))
+    return overlap / max(1, min(a1 - a0, b1 - b0))
 
 
 def bbox_intersects(a: list[int], b: list[int]) -> bool:
@@ -269,6 +274,56 @@ def distance_matrix(components: list[dict[str, object]]) -> np.ndarray:
     return distances
 
 
+def component_distance_matrix(
+    components: list[dict[str, object]],
+    cluster_gap: int,
+    cluster_gap_ratio: float,
+) -> tuple[np.ndarray, dict[str, object]]:
+    count = len(components)
+    distances = np.zeros((count, count), dtype=np.float64)
+    if count <= 1:
+        return distances, {"effective_gap": 1.0}
+
+    sizes = np.array([float(item["size"]) for item in components], dtype=np.float64)
+    areas = np.array([float(item["area"]) for item in components], dtype=np.float64)
+    median_size = float(np.median(sizes)) if len(sizes) else 1.0
+    effective_gap = max(1.0, float(cluster_gap), median_size * max(0.0, float(cluster_gap_ratio)) * 0.9)
+
+    for i, first in enumerate(components):
+        ax0, ay0, ax1, ay1 = first["source_bbox"]
+        acx, acy = first["center"]
+        for j in range(i + 1, count):
+            second = components[j]
+            bx0, by0, bx1, by1 = second["source_bbox"]
+            bcx, bcy = second["center"]
+            gap_score = bbox_distance(first["source_bbox"], second["source_bbox"]) / effective_gap
+            center_scale = max(effective_gap * 2.2, (float(first["size"]) + float(second["size"])) * 0.75)
+            center_score = math.hypot(float(acx) - float(bcx), float(acy) - float(bcy)) / max(1.0, center_scale)
+            align = max(
+                range_overlap_ratio(ax0, ax1, bx0, bx1),
+                range_overlap_ratio(ay0, ay1, by0, by1),
+            )
+            small_area = min(areas[i], areas[j])
+            large_area = max(areas[i], areas[j])
+            distance = gap_score * 0.9 + center_score * 0.1
+            distance *= 1.0 - 0.18 * align
+            if large_area > 0 and small_area / large_area <= 0.18 and align > 0.05:
+                distance *= 0.7
+            distances[i, j] = distance
+            distances[j, i] = distance
+
+    return distances, {
+        "effective_gap": round(effective_gap, 3),
+        "median_component_size": round(median_size, 3),
+    }
+
+
+def report_distance_matrix(distances: np.ndarray) -> list[list[float]] | str:
+    if distances.shape[0] > 80:
+        return f"omitted ({distances.shape[0]} components)"
+    return np.round(distances, 3).tolist()
+
+
 def boxes_from_labels(
     components: list[dict[str, object]],
     labels: np.ndarray,
@@ -299,6 +354,91 @@ def boxes_from_labels(
 
     boxes.sort(key=lambda item: (item["source_bbox"][1], item["source_bbox"][0]))
     return boxes
+
+
+def agglomerative_boxes(
+    components: list[dict[str, object]],
+    cluster_gap: int,
+    cluster_gap_ratio: float,
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    if not components:
+        return [], {"algorithm": "sklearn.cluster.AgglomerativeClustering", "labels": []}
+    if len(components) == 1:
+        return boxes_from_labels(components, np.array([0])), {
+            "algorithm": "sklearn.cluster.AgglomerativeClustering",
+            "labels": [0],
+            "fallback": "single-component",
+        }
+
+    try:
+        from sklearn.cluster import AgglomerativeClustering
+    except Exception as exc:  # pragma: no cover - environment error
+        raise RuntimeError("scikit-learn is required for --split-mode auto/agglomerative") from exc
+
+    distances, distance_info = component_distance_matrix(components, cluster_gap, cluster_gap_ratio)
+    threshold = max(0.25, min(1.5, 0.25 + max(0.0, float(cluster_gap_ratio))))
+    model = AgglomerativeClustering(
+        n_clusters=None,
+        metric="precomputed",
+        linkage="average",
+        distance_threshold=threshold,
+        compute_distances=True,
+    )
+    labels = model.fit_predict(distances)
+    return boxes_from_labels(components, labels), {
+        "algorithm": "sklearn.cluster.AgglomerativeClustering",
+        "linkage": "average",
+        "distance_threshold": round(threshold, 3),
+        "labels": labels.astype(int).tolist(),
+        "distance_matrix": report_distance_matrix(distances),
+        **distance_info,
+    }
+
+
+def normalize_noise_labels(labels: np.ndarray) -> np.ndarray:
+    normalized = labels.astype(int).copy()
+    next_label = max([int(label) for label in normalized if label >= 0], default=-1) + 1
+    for index, label in enumerate(normalized):
+        if label < 0:
+            normalized[index] = next_label
+            next_label += 1
+    return normalized
+
+
+def hdbscan_boxes(
+    components: list[dict[str, object]],
+    cluster_gap: int,
+    cluster_gap_ratio: float,
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    if not components:
+        return [], {"algorithm": "sklearn.cluster.HDBSCAN", "labels": []}
+    if len(components) == 1:
+        return boxes_from_labels(components, np.array([0])), {
+            "algorithm": "sklearn.cluster.HDBSCAN",
+            "labels": [0],
+            "fallback": "single-component",
+        }
+
+    try:
+        from sklearn.cluster import HDBSCAN
+    except Exception as exc:  # pragma: no cover - environment error
+        raise RuntimeError("scikit-learn>=1.3 is required for --split-mode hdbscan") from exc
+
+    distances, distance_info = component_distance_matrix(components, cluster_gap, cluster_gap_ratio)
+    labels = HDBSCAN(
+        min_cluster_size=2,
+        min_samples=1,
+        metric="precomputed",
+        cluster_selection_epsilon=0.25,
+        allow_single_cluster=False,
+    ).fit_predict(distances)
+    labels = normalize_noise_labels(labels)
+    return boxes_from_labels(components, labels), {
+        "algorithm": "sklearn.cluster.HDBSCAN",
+        "labels": labels.astype(int).tolist(),
+        "distance_matrix": report_distance_matrix(distances),
+        **distance_info,
+    }
 
 
 def affinity_boxes(
@@ -344,7 +484,7 @@ def affinity_boxes(
         "cluster_centers": model.cluster_centers_indices_.astype(int).tolist()
         if model.cluster_centers_indices_ is not None
         else [],
-        "distance_matrix": np.round(distances, 3).tolist(),
+        "distance_matrix": report_distance_matrix(distances),
     }
 
 
@@ -364,10 +504,30 @@ def split_boxes(
             "effective_cluster_gap": merge_gap,
         }
     if split_mode == "auto":
-        boxes, auto_info = affinity_boxes(components, cluster_gap)
+        effective_gap = max(0, int(cluster_gap))
+        boxes = attach_component_labels(legacy_connected_boxes(mask, min_area, effective_gap), components)
         return boxes, label_image, components, {
             "mode": "auto",
+            "algorithm": "OpenCV morphology dilation + connectedComponentsWithStats",
+            "effective_cluster_gap": effective_gap,
+        }
+    if split_mode == "agglomerative":
+        boxes, auto_info = agglomerative_boxes(components, cluster_gap, cluster_gap_ratio)
+        return boxes, label_image, components, {
+            "mode": split_mode,
             **auto_info,
+        }
+    if split_mode == "hdbscan":
+        boxes, hdbscan_info = hdbscan_boxes(components, cluster_gap, cluster_gap_ratio)
+        return boxes, label_image, components, {
+            "mode": "hdbscan",
+            **hdbscan_info,
+        }
+    if split_mode == "affinity":
+        boxes, affinity_info = affinity_boxes(components, cluster_gap)
+        return boxes, label_image, components, {
+            "mode": "affinity",
+            **affinity_info,
         }
     return clustered_boxes(components, merge_gap, cluster_gap, cluster_gap_ratio), label_image, components, {
         "mode": "clustered",

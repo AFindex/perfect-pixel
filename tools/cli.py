@@ -61,28 +61,66 @@ def ensure_venv_exists() -> None:
     builder.create(str(venv_dir()))
 
 
-def install_environment() -> None:
+def install_environment(include_rmbg: bool = False) -> None:
     ensure_venv_exists()
     py = str(venv_python())
+    install_target = f"{ROOT}[rmbg]" if include_rmbg else str(ROOT)
     run_checked([py, "-m", "pip", "install", "--upgrade", "pip"])
-    run_checked([py, "-m", "pip", "install", "-e", str(ROOT)])
+    run_checked([py, "-m", "pip", "install", "-e", install_target])
 
 
-def venv_healthy() -> bool:
+def venv_healthy(require_rmbg: bool = False) -> bool:
     py = venv_python()
     if not py.exists():
         return False
+    probe_imports = "import flask, numpy, cv2, PIL, scipy, sklearn"
+    if require_rmbg:
+        probe_imports += "; import torch, torchvision, transformers, kornia, huggingface_hub"
     probe = subprocess.run(
         [
             str(py),
             "-c",
-            "import flask, numpy, cv2, PIL, scipy, sklearn",
+            probe_imports,
         ],
         cwd=str(ROOT),
         capture_output=True,
         text=True,
     )
     return probe.returncode == 0
+
+
+def probe_rmbg2(load_model: bool = False) -> dict[str, object]:
+    py = venv_python()
+    if not py.exists():
+        return {
+            "available": False,
+            "error": "Project venv does not exist. Run `python tools/cli.py init --with-rmbg` first.",
+        }
+
+    code = (
+        "import json; "
+        "from tools.rmbg2 import rmbg2_status; "
+        f"print(json.dumps(rmbg2_status(load_model={load_model}), ensure_ascii=False))"
+    )
+    completed = subprocess.run(
+        [str(py), "-c", code],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        timeout=300 if load_model else 45,
+    )
+    if completed.returncode != 0:
+        return {
+            "available": False,
+            "error": completed.stderr.strip() or completed.stdout.strip() or "RMBG-2.0 probe failed.",
+        }
+    try:
+        return json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return {
+            "available": False,
+            "error": completed.stdout.strip() or "RMBG-2.0 probe returned invalid JSON.",
+        }
 
 
 def ensure_runtime(allow_reexec: bool = True) -> None:
@@ -113,6 +151,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     init_parser = subparsers.add_parser("init", help="Bootstrap the local Python environment.")
     init_parser.add_argument("--force", action="store_true", help="Reinstall dependencies even if the venv exists.")
+    init_parser.add_argument("--with-rmbg", action="store_true", help="Install optional RMBG-2.0 runtime dependencies.")
+    init_parser.add_argument(
+        "--rmbg-warmup",
+        action="store_true",
+        help="After installing optional dependencies, download and load RMBG-2.0 once.",
+    )
 
     doctor_parser = subparsers.add_parser("doctor", help="Check local environment and tool availability.")
     doctor_parser.add_argument("--json", action="store_true", help="Emit JSON instead of text.")
@@ -184,11 +228,11 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--arrange-merge-gap", type=int, default=2, help="Merge nearby mask islands before splitting.")
     run_parser.add_argument(
         "--arrange-split-mode",
-        choices=["auto", "clustered", "connected"],
+        choices=["auto", "agglomerative", "hdbscan", "affinity", "clustered", "connected"],
         default="auto",
-        help="Infer grouping automatically, use explicit clustered grouping, or legacy connected splitting.",
+        help="Use OpenCV morphology auto grouping, try sklearn clusterers, or use fallback splitters.",
     )
-    run_parser.add_argument("--arrange-cluster-gap", type=int, default=18, help="Preferred clustered grouping gap.")
+    run_parser.add_argument("--arrange-cluster-gap", type=int, default=14, help="Preferred clustered grouping gap.")
     run_parser.add_argument(
         "--arrange-cluster-gap-ratio",
         type=float,
@@ -204,9 +248,10 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def handle_init(force: bool) -> int:
-    if force or not venv_healthy():
-        install_environment()
+def handle_init(force: bool, with_rmbg: bool, rmbg_warmup: bool) -> int:
+    include_rmbg = with_rmbg or rmbg_warmup
+    if force or not venv_healthy(require_rmbg=include_rmbg):
+        install_environment(include_rmbg=include_rmbg)
     ok, unfake_message = check_unfake()
     payload = {
         "ok": True,
@@ -214,6 +259,8 @@ def handle_init(force: bool) -> int:
         "python": str(venv_python()),
         "unfake": unfake_message if ok else unfake_message,
     }
+    if include_rmbg:
+        payload["rmbg2"] = probe_rmbg2(load_model=rmbg_warmup)
     print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0
 
@@ -226,6 +273,7 @@ def handle_doctor(as_json: bool) -> int:
         "inProjectVenv": in_project_venv(),
         "venvExists": venv_python().exists(),
         "venvHealthy": venv_healthy(),
+        "rmbg2": probe_rmbg2(load_model=False),
         "unfakeAvailable": ok,
         "unfake": unfake_message,
         "outputRoot": str(DEFAULT_OUTPUT),
@@ -239,6 +287,8 @@ def handle_doctor(as_json: bool) -> int:
     print(f"Project venv: {'yes' if payload['inProjectVenv'] else 'no'}")
     print(f".venv exists: {'yes' if payload['venvExists'] else 'no'}")
     print(f".venv healthy: {'yes' if payload['venvHealthy'] else 'no'}")
+    rmbg2 = payload.get("rmbg2") or {}
+    print(f"RMBG-2.0: {'available' if rmbg2.get('available') else 'not ready'}")
     print(f"unfake: {payload['unfake']}")
     print(f"Default output: {payload['outputRoot']}")
     return 0
@@ -344,7 +394,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "init":
-        return handle_init(args.force)
+        return handle_init(args.force, args.with_rmbg, args.rmbg_warmup)
     if args.command == "doctor":
         return handle_doctor(args.json)
     if args.command == "run":

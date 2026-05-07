@@ -39,7 +39,7 @@ class PipelineSettings:
     arrange_min_area: int = 16
     arrange_merge_gap: int = 2
     arrange_split_mode: str = "auto"
-    arrange_cluster_gap: int = 18
+    arrange_cluster_gap: int = 14
     arrange_cluster_gap_ratio: float = 0.5
 
 

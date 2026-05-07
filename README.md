@@ -24,6 +24,21 @@ Web 参数面板支持悬停 `?` 查看参数含义，也可以把当前算法�
 python tools/cli.py init
 ```
 
+如果要提前准备 RMBG-2.0 推理环境：
+
+```powershell
+python tools/cli.py init --with-rmbg
+python tools/rmbg2.py doctor --json
+```
+
+需要预先下载并加载一次模型时可运行：
+
+```powershell
+python tools/cli.py init --with-rmbg --rmbg-warmup
+```
+
+RMBG-2.0 的 Hugging Face 权重需要接受模型许可；如果是 gated 访问，请先配置 `HF_TOKEN` 或完成 `huggingface-cli login`。
+
 然后启动本地后端：
 
 ```powershell
@@ -96,7 +111,7 @@ python tools/cli.py run input.png
 python tools/cli.py run input.png --arrange-sprites --arrange-columns 4 --arrange-padding 2
 ```
 
-默认 `--arrange-split-mode auto` 会先找 mask 小岛，再复用 `scikit-learn` 的 `AffinityPropagation` 根据组件相似度自动决定簇数量。需要手动控制时用 `--arrange-split-mode clustered --arrange-cluster-gap 18`；需要旧逻辑时可改用 `--arrange-split-mode connected`。
+默认 `--arrange-split-mode auto` 会先找 mask 小岛，再用 OpenCV 形态学合并和连通组件把同一元素里断开的装饰、箭头、震动线聚到一起。需要对照聚类算法时可试 `--arrange-split-mode agglomerative`、`--arrange-split-mode hdbscan` 或 `--arrange-split-mode affinity`；需要手动距离时用 `--arrange-split-mode clustered --arrange-cluster-gap 14`；需要旧逻辑时可改用 `--arrange-split-mode connected`。
 
 ## 当前管线
 
@@ -107,7 +122,7 @@ python tools/cli.py run input.png --arrange-sprites --arrange-columns 4 --arrang
 5. unfake 像素恢复：复用本机 `unfake` CLI。
 6. 调色板收敛：Pillow quantize 或 pngquant。
 7. 导出与 QA：true-res PNG、最近邻预览、debug 图、metadata。
-8. 可选 Mask 切分重排：OpenCV 连通组件切分，scikit-learn 自动聚类，Pillow 统一 cell 排列，导出整理版 sprite、mask 和聚类单件。
+8. 可选 Mask 切分重排：OpenCV 形态学合并/连通组件切分，可切换 scikit-learn 聚类对照，Pillow 统一 cell 排列，导出整理版 sprite、mask 和聚类单件。
 
 ## 可跑的最小命令链
 

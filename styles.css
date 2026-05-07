@@ -723,6 +723,42 @@ h2 {
     background 140ms ease;
 }
 
+.stage-card::before {
+  content: "";
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: -1px;
+  width: 4px;
+  border-radius: 999px;
+  background: transparent;
+  transition: background 140ms ease;
+}
+
+.stage-card::after {
+  content: attr(data-run-state);
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  border-radius: 999px;
+  padding: 0 8px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 780;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-2px);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease,
+    background 140ms ease,
+    color 140ms ease;
+}
+
 .stage-card:hover {
   transform: translateY(-1px);
   border-color: var(--line-strong);
@@ -739,6 +775,58 @@ h2 {
   box-shadow: 0 14px 28px rgba(20, 117, 111, 0.14);
 }
 
+.stage-card.is-complete {
+  border-color: rgba(20, 117, 111, 0.42);
+  background: linear-gradient(180deg, #ffffff, #eef8f5);
+}
+
+.stage-card.is-running {
+  transform: translateY(-1px);
+  border-color: var(--teal);
+  background: linear-gradient(180deg, #ffffff, #e4f4f1);
+  box-shadow:
+    0 0 0 3px rgba(20, 117, 111, 0.12),
+    0 16px 30px rgba(20, 117, 111, 0.14);
+}
+
+.stage-card.is-failed {
+  border-color: rgba(201, 93, 69, 0.72);
+  background: linear-gradient(180deg, #ffffff, #fff1ed);
+  box-shadow:
+    0 0 0 3px rgba(201, 93, 69, 0.11),
+    0 14px 28px rgba(201, 93, 69, 0.12);
+}
+
+.stage-card.is-running::before {
+  background: var(--teal);
+}
+
+.stage-card.is-failed::before {
+  background: var(--coral);
+}
+
+.stage-card.is-complete::after,
+.stage-card.is-running::after,
+.stage-card.is-failed::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.stage-card.is-complete::after {
+  background: #dff1ee;
+  color: #0d625c;
+}
+
+.stage-card.is-running::after {
+  background: var(--teal);
+  color: #fff;
+}
+
+.stage-card.is-failed::after {
+  background: #f6ded7;
+  color: #9f402c;
+}
+
 .stage-index {
   display: inline-flex;
   align-items: center;
@@ -751,6 +839,16 @@ h2 {
   color: #fff;
   font-size: 12px;
   font-weight: 800;
+  transition: background 140ms ease;
+}
+
+.stage-card.is-complete .stage-index,
+.stage-card.is-running .stage-index {
+  background: var(--teal);
+}
+
+.stage-card.is-failed .stage-index {
+  background: var(--coral);
 }
 
 .stage-card strong,

@@ -130,6 +130,14 @@ const HISTORY_LIMIT = 12;
 const SUBDIR_STORAGE_KEY = "perfectPixel.outputSubdir";
 const PRESET_STORAGE_KEY = "perfectPixel.parameterPresets";
 const PRESET_LIMIT = 20;
+const STAGE_ORDER = ["ingest", "background", "trimap", "defringe", "unfake", "palette", "qa"];
+const CLEAN_STAGE_ORDER = ["ingest", "background", "trimap", "defringe", "qa"];
+const STAGE_PROGRESS_INTERVAL_MS = 900;
+const pipelineProgress = {
+  timer: 0,
+  stages: [],
+  activeIndex: -1,
+};
 const historyConfig = {
   input: {
     key: "perfectPixel.inputHistory",
@@ -613,6 +621,112 @@ function shouldRunUnfake() {
   return state.processMode !== "clean";
 }
 
+function currentRunStages() {
+  return shouldRunUnfake() ? STAGE_ORDER : CLEAN_STAGE_ORDER;
+}
+
+function clearStageProgress() {
+  qsa(".stage-card").forEach((card) => {
+    card.classList.remove("is-running", "is-complete", "is-failed");
+    card.removeAttribute("data-run-state");
+    card.removeAttribute("aria-current");
+  });
+}
+
+function setStageProgress(activeKey, stages = currentRunStages()) {
+  const activeIndex = stages.indexOf(activeKey);
+  qsa(".stage-card").forEach((card) => {
+    const index = stages.indexOf(card.dataset.step);
+    const isRunning = index === activeIndex;
+    const isComplete = index >= 0 && activeIndex >= 0 && index < activeIndex;
+    card.classList.toggle("is-running", isRunning);
+    card.classList.toggle("is-complete", isComplete);
+    card.classList.remove("is-failed");
+    card.dataset.runState = isRunning ? "运行中" : isComplete ? "完成" : "";
+    if (isRunning) {
+      card.setAttribute("aria-current", "step");
+    } else {
+      card.removeAttribute("aria-current");
+    }
+    if (!card.dataset.runState) {
+      card.removeAttribute("data-run-state");
+    }
+  });
+}
+
+function stopStageProgressTimer() {
+  window.clearInterval(pipelineProgress.timer);
+  pipelineProgress.timer = 0;
+}
+
+function startStageProgress() {
+  stopStageProgressTimer();
+  const stages = currentRunStages();
+  pipelineProgress.stages = stages;
+  pipelineProgress.activeIndex = 0;
+  setStageProgress(stages[0], stages);
+
+  pipelineProgress.timer = window.setInterval(() => {
+    const lastIndex = stages.length - 1;
+    pipelineProgress.activeIndex = Math.min(pipelineProgress.activeIndex + 1, lastIndex);
+    setStageProgress(stages[pipelineProgress.activeIndex], stages);
+  }, STAGE_PROGRESS_INTERVAL_MS);
+}
+
+function finishStageProgress() {
+  stopStageProgressTimer();
+  const stages = pipelineProgress.stages.length ? pipelineProgress.stages : currentRunStages();
+  qsa(".stage-card").forEach((card) => {
+    const isComplete = stages.includes(card.dataset.step);
+    card.classList.remove("is-running", "is-failed");
+    card.classList.toggle("is-complete", isComplete);
+    card.removeAttribute("aria-current");
+    if (isComplete) {
+      card.dataset.runState = "完成";
+    } else {
+      card.removeAttribute("data-run-state");
+    }
+  });
+  pipelineProgress.activeIndex = stages.length - 1;
+}
+
+function stageFromRunError(data) {
+  const logs = Array.isArray(data?.logs) ? data.logs : [];
+  const failedCommand = Array.isArray(data?.failedCommand) ? data.failedCommand.join(" ") : "";
+  if (/postcheck\.py/.test(failedCommand)) return "qa";
+  if (/unfake/.test(failedCommand)) return "unfake";
+  if (/preclean\.py/.test(failedCommand)) return "defringe";
+  if (!logs.length) return pipelineProgress.stages[pipelineProgress.activeIndex] || "ingest";
+  if (logs.length <= 1) return "defringe";
+  if (shouldRunUnfake() && logs.length === 2) return "unfake";
+  return "qa";
+}
+
+function failStageProgress(stageKey) {
+  stopStageProgressTimer();
+  const stages = pipelineProgress.stages.length ? pipelineProgress.stages : currentRunStages();
+  const failedKey = stages.includes(stageKey)
+    ? stageKey
+    : stages[pipelineProgress.activeIndex] || stages[stages.length - 1];
+  const failedIndex = stages.indexOf(failedKey);
+  qsa(".stage-card").forEach((card) => {
+    const index = stages.indexOf(card.dataset.step);
+    const isFailed = card.dataset.step === failedKey;
+    const isComplete = index >= 0 && failedIndex >= 0 && index < failedIndex;
+    card.classList.remove("is-running");
+    card.classList.toggle("is-complete", isComplete);
+    card.classList.toggle("is-failed", isFailed);
+    card.removeAttribute("aria-current");
+    if (isFailed) {
+      card.dataset.runState = "失败";
+    } else if (isComplete) {
+      card.dataset.runState = "完成";
+    } else {
+      card.removeAttribute("data-run-state");
+    }
+  });
+}
+
 function buildCommand() {
   const input = controls.inputPath.value.trim() || "input.png";
   const outputDir = getEffectiveOutputDir();
@@ -898,6 +1012,7 @@ async function runPipeline() {
   controls.runPipelineButton.disabled = true;
   controls.runPipelineButton.textContent = "运行中";
   setRunStatus("运行中");
+  startStageProgress();
   controls.resultBody.innerHTML = '<p class="empty-state">正在执行 preclean -> unfake -> postcheck...</p>';
 
   try {
@@ -909,6 +1024,7 @@ async function runPipeline() {
     if (!response.ok || !data.ok) {
       throw Object.assign(new Error(data.error || "运行失败"), { data });
     }
+    finishStageProgress();
     setRunStatus("完成");
     addHistory("input", data.input || controls.inputPath.value);
     addHistory("output", getOutputBaseDir());
@@ -916,6 +1032,7 @@ async function runPipeline() {
     renderResult(data);
     showToast("管线执行完成");
   } catch (error) {
+    failStageProgress(stageFromRunError(error.data));
     setRunStatus("失败");
     renderRunError(
       `${error.message || "运行失败"}。如果当前是 file:// 页面，请先启动 python tools/server.py 并打开 http://127.0.0.1:8765/。`,
